@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#18212b">
+<title>Crédits et licences – Calcul productible PV</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2318212b'/%3E%3Ccircle cx='22' cy='22' r='9' fill='%23f2a20c'/%3E%3Cpath d='M12 50l10-16h30l-10 16z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--ink:#18212b;--muted:#5d6b7a;--line:#e2e6eb;--pv:#f2a20c;--chip:#eef1f4}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);font-size:14px;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding:28px 20px 48px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+h1{font-size:20px;margin:0;letter-spacing:-.01em}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 10px}
+a{color:var(--ink)}
+.back{font-size:13px;font-weight:600;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 12px;text-decoration:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 16px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-size:11px;color:var(--muted);font-weight:600;text-align:left;padding:9px 8px 7px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid #f0f2f5;vertical-align:top}
+tr:last-child td{border-bottom:0}
+td:first-child{font-weight:600;white-space:nowrap}
+.tag{display:inline-block;font-size:11.5px;font-weight:600;background:var(--chip);border-radius:999px;padding:2px 9px;white-space:nowrap}
+p{margin:8px 0}
+.note{color:var(--muted);font-size:13px}
+.warn{border-left:3px solid var(--pv);background:#fff;border-radius:0 10px 10px 0;padding:10px 14px;font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Crédits et licences</h1>
+    <a class="back" href="./">← Retour à l'application</a>
+  </header>
+
+  <p><b>Calcul productible PV</b> est un logiciel libre publié sous <a href="LICENSE">licence MIT</a> © 2026 Cédric Brachet – SAS CELLS. Le code source est disponible sur <a href="https://github.com/CBT135/Calcul-productible" target="_blank" rel="noopener">GitHub</a>. Le calcul s'exécute entièrement dans le navigateur : aucun fichier déposé n'est transmis à un serveur.</p>
+
+  <h2>Avertissement</h2>
+  <div class="warn">Les résultats sont fournis à titre indicatif, sans garantie. Ils reposent sur des modèles, sur les données météorologiques et sur les fichiers fournis par l'utilisateur. Pour un usage contractuel ou un financement, ils doivent être confrontés à un logiciel de simulation de référence et à une expertise indépendante. La méthodologie est comparable à celle de PVsyst. L'application n'est ni affiliée à PVsyst SA ni approuvée par elle ; elle lit uniquement le format texte des fichiers .PAN et .OND fournis par l'utilisateur.</div>
+
+  <h2>Bibliothèques logicielles</h2>
+  <div class="card"><table>
+    <tr><th>Composant</th><th>Usage</th><th>Licence</th></tr>
+    <tr><td><a href="https://pvlib-python.readthedocs.io" target="_blank" rel="noopener">pvlib python</a></td><td>Modèles solaires et photovoltaïques (position solaire, Perez, sheds, une diode, thermique, IAM)</td><td><span class="tag">BSD 3-Clause</span></td></tr>
+    <tr><td><a href="https://pyodide.org" target="_blank" rel="noopener">Pyodide</a></td><td>Exécution de Python dans le navigateur</td><td><span class="tag">MPL 2.0</span></td></tr>
+    <tr><td><a href="https://numpy.org" target="_blank" rel="noopener">NumPy</a>, <a href="https://pandas.pydata.org" target="_blank" rel="noopener">pandas</a>, <a href="https://scipy.org" target="_blank" rel="noopener">SciPy</a>, <a href="https://www.h5py.org" target="_blank" rel="noopener">h5py</a></td><td>Calcul numérique et séries temporelles</td><td><span class="tag">BSD 3-Clause</span></td></tr>
+    <tr><td><a href="https://openpyxl.readthedocs.io" target="_blank" rel="noopener">openpyxl</a></td><td>Export du classeur Excel</td><td><span class="tag">MIT</span></td></tr>
+    <tr><td><a href="https://www.chartjs.org" target="_blank" rel="noopener">Chart.js</a></td><td>Graphiques</td><td><span class="tag">MIT</span></td></tr>
+    <tr><td><a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a></td><td>Carte de localisation</td><td><span class="tag">BSD 2-Clause</span></td></tr>
+    <tr><td><a href="https://rsms.me/inter/" target="_blank" rel="noopener">Inter</a></td><td>Police de caractères</td><td><span class="tag">SIL OFL 1.1</span></td></tr>
+  </table></div>
+
+  <h2>Données</h2>
+  <div class="card"><table>
+    <tr><th>Source</th><th>Usage</th><th>Conditions</th></tr>
+    <tr><td><a href="https://joint-research-centre.ec.europa.eu/photovoltaic-geographical-information-system-pvgis_fr" target="_blank" rel="noopener">PVGIS</a></td><td>Années météo types (TMY), horizon, données mensuelles. Fichiers téléchargés par l'utilisateur.</td><td>© Union européenne, Centre commun de recherche (JRC). Réutilisation autorisée avec mention de la source (<a href="https://data.jrc.ec.europa.eu/licence/com_reuse" target="_blank" rel="noopener">avis de réutilisation de la Commission</a>).</td></tr>
+    <tr><td><a href="https://globalsolaratlas.info" target="_blank" rel="noopener">Global Solar Atlas</a></td><td>Moyennes long terme GHI, DIF et température pour le recalage du TMY. Valeurs récupérées par l'utilisateur.</td><td>Global Solar Atlas 2.0, données © Solargis, publiées par le World Bank Group (ESMAP) sous <span class="tag">CC BY 4.0</span>.</td></tr>
+    <tr><td><a href="https://geoservices.ign.fr" target="_blank" rel="noopener">IGN – Géoplateforme</a></td><td>Fonds de carte Plan IGN et photographies aériennes</td><td>© IGN, <a href="https://www.etalab.gouv.fr/licence-ouverte-open-licence/" target="_blank" rel="noopener">Licence ouverte Etalab 2.0</a>.</td></tr>
+    <tr><td><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a></td><td>Fond de carte de secours hors de France</td><td>© contributeurs OpenStreetMap, <span class="tag">ODbL</span>.</td></tr>
+    <tr><td>Fichiers .PAN / .OND</td><td>Caractéristiques des modules et des onduleurs</td><td>Fournis par l'utilisateur. Ils restent la propriété de leurs auteurs (fabricants, laboratoires) et ne sont pas redistribués par l'application.</td></tr>
+  </table></div>
+
+  <p class="note" style="margin-top:22px">Pour citer les données dans un rapport : « Données météorologiques : PVGIS 5.3 (SARAH-3), © Union européenne, JRC ; recalage sur Global Solar Atlas 2.0, © Solargis / World Bank Group, CC BY 4.0 ».</p>
+</div>
+</body>
+</html>

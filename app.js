@@ -332,7 +332,15 @@ let map, marker;
 function initMap() {
   if (!window.L) return;
   map = L.map('map', { zoomControl: true, attributionControl: true }).setView([S.cfg.site.lat, S.cfg.site.lon], 9);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+  // Fonds IGN (Géoplateforme, licence ouverte Etalab) ; OpenStreetMap en secours hors de France
+  const ign = (layer, fmt) => L.tileLayer('https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=' + layer +
+    '&STYLE=normal&TILEMATRIXSET=PM&FORMAT=' + fmt + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
+    { maxZoom: 19, attribution: '© <a href="https://geoservices.ign.fr" target="_blank" rel="noopener">IGN – Géoplateforme</a>' });
+  const plan = ign('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png');
+  const ortho = ign('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg');
+  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' });
+  plan.addTo(map);
+  L.control.layers({ 'Plan IGN': plan, 'Photographies aériennes IGN': ortho, 'OpenStreetMap (hors France)': osm }, null, { position: 'topright' }).addTo(map);
   marker = L.marker([S.cfg.site.lat, S.cfg.site.lon], { draggable: true }).addTo(map);
   const setLL = (ll) => { S.cfg.site.lat = +ll.lat.toFixed(5); S.cfg.site.lon = +ll.lng.toFixed(5); fillForm(); onChange('site.lat'); };
   map.on('click', (e) => { marker.setLatLng(e.latlng); setLL(e.latlng); });
@@ -633,7 +641,7 @@ $('#expPdf').addEventListener('click', () => {
     ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
     <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
-    <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle une diode PVsyst, courbes .OND). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel.</div>`;
+    <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle une diode PVsyst, courbes .OND). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
   $('#report').innerHTML = html;
   $$('.tab').forEach((t) => t.classList.toggle('on', t.id === 'tab-' + $('#tabs button.on').dataset.tab));
   setTimeout(() => window.print(), 300);

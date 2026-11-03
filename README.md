@@ -61,3 +61,16 @@ open('resultats.xlsx', 'wb').write(P.export_xlsx(res))
 ```
 
 Dépendances : `pvlib>=0.13`, `numpy`, `pandas`, `scipy`, `openpyxl`.
+
+## Licence et crédits
+
+Code publié sous [licence MIT](LICENSE) © 2026 Cédric Brachet – SAS CELLS.
+
+Les composants tiers sont détaillés dans la page [Crédits et licences](credits.html) :
+- **Bibliothèques** : pvlib, NumPy, pandas, SciPy et h5py (BSD 3-Clause) ; Pyodide (MPL 2.0) ; openpyxl et Chart.js (MIT) ; Leaflet (BSD 2-Clause) ; police Inter (OFL).
+- **Données** :
+  - PVGIS © Union européenne (JRC) ;
+  - Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) ;
+  - fonds de carte © IGN – Géoplateforme (Licence ouverte Etalab) et © OpenStreetMap (ODbL).
+
+Les résultats sont indicatifs et fournis sans garantie. La méthodologie est comparable à celle de PVsyst, sans affiliation avec PVsyst SA.
