@@ -469,7 +469,7 @@ function renderResults() {
 }
 
 function chart(id, cfg) { if (S.charts[id]) S.charts[id].destroy(); S.charts[id] = new Chart($('#' + id), cfg); return S.charts[id]; }
-Chart.defaults.font.family = 'Inter, system-ui, sans-serif'; Chart.defaults.font.size = 11.5; Chart.defaults.color = '#5d6b7a';
+Chart.defaults.animation = false; Chart.defaults.font.family = 'Inter, system-ui, sans-serif'; Chart.defaults.font.size = 11.5; Chart.defaults.color = '#5d6b7a';
 function drawCharts() {
   const r = S.res, m = r.monthly.slice(0, 12);
   chart('chMonthly', {
