@@ -27,12 +27,12 @@ const DEFAULTS = {
 };
 const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
 const FILES = {
-  tmy: { label: 'TMY PVGIS', accept: '.csv,.json', req: true },
+  tmy: { label: 'TMY PVGIS', accept: '.csv,.json,.htm,.html,.txt', req: true },
   pan: { label: 'Module .PAN', accept: '.pan,.PAN', req: true },
   ond: { label: 'Onduleur .OND', accept: '.ond,.OND', req: true },
-  gsa: { label: 'Global Solar Atlas', accept: '.json', req: false },
-  horizon: { label: 'Masque lointain', accept: '.csv,.txt,.hor', req: false },
-  pvgis_monthly: { label: 'PVGIS mensuel (P90)', accept: '.csv,.txt', req: false },
+  gsa: { label: 'Global Solar Atlas', accept: '.json,.htm,.html,.txt', req: false },
+  horizon: { label: 'Masque lointain', accept: '.csv,.txt,.hor,.htm,.html', req: false },
+  pvgis_monthly: { label: 'PVGIS mensuel (P90)', accept: '.csv,.txt,.htm,.html', req: false },
 };
 const STORE = 'calcul-productible.v1';
 
@@ -111,16 +111,17 @@ function buildForm() {
       num('site.alt', 'Altitude', 'm') + num('site.albedo', 'Albédo du site', '', { step: 0.01, hint: 'Albédo vu par la face avant.' }) +
       `<div class="fld full"><div id="map"></div><div class="hint">Cliquer sur la carte ou déplacer le repère pour placer le site.</div>
       <label style="margin-top:8px">Télécharger les données pour ces coordonnées</label><div class="links" id="dlLinks"></div>
-      <div class="hint">Les liens s'ouvrent dans un nouvel onglet : enregistrer la page (Ctrl+S / ⌘S) puis déposer le fichier ci-dessous.</div></div>`, true),
+      <div class="hint">Chaque lien ouvre les données du site dans un nouvel onglet. Enregistrer la page (Ctrl+S / ⌘S) : le fichier .htm obtenu se dépose tel quel dans l'application.</div></div>`, true),
     section('meteo', 'Météo', drop('tmy', '<span>TMY PVGIS 5.3 au format CSV ou JSON</span>') +
       chk('meteo.tmy_has_horizon', "Le TMY a été téléchargé avec l'horizon PVGIS (« usehorizon »)", { hint: "Lu automatiquement dans un fichier JSON. Pour un CSV, cocher si l'option horizon était active : le masque PVGIS est alors déjà dans le direct. Recommandé : TMY sans horizon + masque déposé ci-dessous." }) +
-      sel('meteo.gsa_mode', 'Recalage sur Global Solar Atlas', [['monthly', 'Mensuel (GHI et DIF, 12 mois)'], ['annual', 'Annuel (GHI et DIF)'], ['none', 'Aucun (TMY brut)']], { full: true }) +
-      chk('meteo.gsa_align_temp', 'Recaler aussi la température mensuelle sur GSA') +
-      drop('gsa', '<span>JSON de l\'API GSA, ou coller le texte ci-dessous</span>') +
-      `<div class="fld full"><textarea id="gsaPaste" placeholder='Coller ici la réponse JSON de https://api.globalsolaratlas.info/data/lta?loc=lat,lon'></textarea></div>
-      <div class="fld full" id="gsaTable"></div>`),
+      ''),
     section('horizon', 'Masque lointain', drop('horizon', '<span>CSV PVsyst (Azimut;Hauteur, 0 = Sud, Est &lt; 0) ou horizon PVGIS</span>') +
       chk('horizon.use', 'Appliquer le masque (direct coupé sous l\'horizon, diffus réduit)')),
+    section('gsa', 'Global Solar Atlas', sel('meteo.gsa_mode', 'Recalage du TMY', [['monthly', 'Mensuel (GHI et DIF, 12 mois)'], ['annual', 'Annuel (GHI et DIF)'], ['none', 'Aucun (TMY brut)']], { full: true }) +
+      chk('meteo.gsa_align_temp', 'Recaler aussi la température mensuelle sur GSA') +
+      drop('gsa', '<span>JSON de l\'API GSA (.json ou page .htm enregistrée), ou coller le texte ci-dessous</span>') +
+      `<div class="fld full"><textarea id="gsaPaste" placeholder='Coller ici la réponse JSON de https://api.globalsolaratlas.info/data/lta?loc=lat,lon'></textarea></div>
+      <div class="fld full" id="gsaTable"></div>`),
     section('module', 'Modules', drop('pan', '<span>Fichier PVsyst .PAN</span>') +
       num('array.n_series', 'Modules en série', '', { step: 1, min: 1 }) + num('array.n_strings', 'Nombre de chaînes', '', { ro: true, hint: 'Calculé à partir des groupes d\'onduleurs.' }) +
       num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
@@ -236,6 +237,7 @@ async function readFile(key, file) {
   const buf = await file.arrayBuffer();
   let text = new TextDecoder('utf-8').decode(buf);
   if (text.includes('�')) text = new TextDecoder('windows-1252').decode(buf);
+  text = unwrapHtml(text);
   if (key === 'gsa') return loadGsaText(text, file.name);
   S.files[key] = text; S.names[key] = file.name; S.info[key] = null;
   await parseFile(key); save(); refreshAll();
@@ -256,6 +258,15 @@ async function parseFile(key) {
   } catch (e) {
     S.info[key] = { error: e.message }; if (el) { el.textContent = '⚠ ' + e.message; el.style.color = 'var(--block)'; }
   }
+}
+// Une réponse d'API enregistrée par le navigateur (Ctrl+S) devient une page .htm : on en extrait le texte brut.
+function unwrapHtml(text) {
+  const head = text.slice(0, 2000).toLowerCase();
+  if (!/^\s*(<!doctype html|<html|<head|<body|<pre|<meta)/.test(head) && !head.includes('<pre')) return text;
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  const pres = [...doc.querySelectorAll('pre')].map((p) => p.textContent).filter((t) => t.trim());
+  const out = pres.length ? pres.sort((a, b) => b.length - a.length)[0] : (doc.body ? doc.body.textContent : text);
+  return out.replace(/\u00a0/g, ' ').trim() + '\n';
 }
 function clearFile(key) { delete S.files[key]; delete S.names[key]; delete S.info[key]; if (key === 'gsa') S.gsa = null; save(); refreshAll(); }
 
@@ -372,7 +383,8 @@ function renderDerived() {
   const ninv = c.inverters.groups.reduce((a, g) => a + g[0], 0);
   const sums = {
     project: `${c.project.name} – ${c.project.variant}`, site: `${nf(c.site.lat, 4)} / ${nf(c.site.lon, 4)}`,
-    meteo: (S.files.tmy ? 'TMY ✓' : 'TMY manquant') + (c.meteo.gsa_mode !== 'none' ? (S.gsa ? ' · GSA ✓' : ' · GSA manquant') : ' · sans recalage'),
+    meteo: S.files.tmy ? `TMY ✓${c.meteo.tmy_has_horizon ? ' · horizon PVGIS inclus' : ''}` : 'TMY manquant',
+    gsa: c.meteo.gsa_mode === 'none' ? 'sans recalage' : (S.gsa ? `${c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'} ✓` : 'données manquantes'),
     horizon: S.files.horizon ? (c.horizon.use ? 'appliqué' : 'désactivé') : 'aucun',
     module: pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
     inverter: ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
@@ -533,7 +545,7 @@ function renderP90() {
     <tr><td>P99</td><td>${nf(p.p99, 1)} kWh/kWc</td></tr>
     <tr><td>Incertitude combinée (1σ)</td><td>${nf(p.sigma_pct, 2)} %</td></tr>
     <tr><td>Variabilité météo</td><td>${esc(p.meteo_var_source)}</td></tr></table>
-    <p class="note">Px = P50 × (1 − z<sub>x</sub> × σ), σ = racine de la somme des carrés des incertitudes ; z<sub>90</sub> = 1,2816 (loi normale), comme le classeur P50-P90.</p></div>
+    <p class="note">Px = P50 × (1 − z<sub>x</sub> × σ), σ = racine de la somme des carrés des incertitudes ; z<sub>90</sub> = 1,2816 (loi normale).</p></div>
     <div><table class="res"><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}<tr class="tot"><td>Combinée</td><td>${nf(p.sigma_pct, 2)} %</td></tr></table></div></div>` +
     (S.res.lifetime.length > 1 ? `<h3 style="margin-top:14px">Évolution sur ${S.res.lifetime.length} ans (dégradation ${nf(S.res.config.lifetime.degradation, 2)} %/an)</h3><div class="tblwrap"><table class="res"><tr><th>Année</th><th>P50 kWh/kWc</th><th>P90 kWh/kWc</th><th>P50 MWh</th></tr>${S.res.lifetime.map((l) => `<tr><td>${l.annee}</td><td>${nf(l.p50, 1)}</td><td>${nf(l.p90, 1)}</td><td>${nf(l.e_p50_mwh, 0)}</td></tr>`).join('')}</table></div>` : '');
 }

@@ -7,7 +7,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);font-size:14px}
 #app{display:flex;height:100%}
-aside{width:400px;flex:0 0 400px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;z-index:10}
+aside{width:clamp(460px,40vw,640px);flex:0 0 clamp(460px,40vw,640px);background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;z-index:10}
 .head{padding:18px 18px 12px;border-bottom:1px solid var(--line)}
 .head h1{font-size:17px;margin:0 0 4px;letter-spacing:-.01em}
 .head p{margin:0;font-size:12px;color:var(--muted);line-height:1.4}
@@ -23,7 +23,7 @@ details.sec>summary small{font-size:11.5px;color:var(--muted);font-weight:400;te
 details.sec>summary::after{content:'▸';color:var(--muted);font-size:12px;transition:transform .15s}
 details.sec[open]>summary::after{transform:rotate(90deg)}
 .secbody{padding:0 18px 14px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px 12px}
 .grid .full{grid-column:1/-1}
 .fld label{display:flex;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px}
 .fld label i{font-style:normal;font-weight:400;color:#8a96a3}
@@ -58,7 +58,7 @@ input[readonly]{background:var(--chip);color:var(--muted)}
 .mtable th:first-child,.mtable td:first-child{text-align:left}
 .mtable td{padding:2px 4px;text-align:right;border-top:1px solid #f0f2f5}
 .mtable input{width:62px;padding:3px 5px;font-size:12px;text-align:right}
-#map{height:170px;border-radius:10px;border:1px solid var(--line);margin-top:4px}
+#map{height:220px;border-radius:10px;border:1px solid var(--line);margin-top:4px}
 .foot{padding:8px 18px 12px;font-size:11px;color:var(--muted);line-height:1.45;border-top:1px solid var(--line)}
 .foot a{color:inherit}
 
@@ -135,11 +135,12 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
   .loss .val{display:none}
 }
 
+@page{size:A4 portrait;margin:16mm 15mm 18mm 15mm}
 @media print{
-  @page{size:A4;margin:14mm 12mm}
+  html,body{height:auto!important;margin:0;padding:0}
   body{background:#fff}
   #app{display:none!important}
-  #report{display:block;font-size:10.5pt;color:#000}
+  #report{display:block;font-size:10.5pt;color:#000;margin:0;padding:0;width:auto}
   #report h1{font-size:18pt;margin:0 0 2mm}
   #report h2{font-size:12.5pt;margin:7mm 0 2mm;padding-bottom:1mm;border-bottom:1.5px solid #18212b;page-break-after:avoid}
   #report .sub{color:#5d6b7a;margin-bottom:5mm}
