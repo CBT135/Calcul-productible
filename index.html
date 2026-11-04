@@ -4,9 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#18212b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Productible">
 <title>Calcul productible PV</title>
 <meta name="description" content="Estimation de productible photovoltaïque type PVsyst (pvlib, TMY PVGIS recalé Global Solar Atlas, fichiers .PAN/.OND).">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2318212b'/%3E%3Ccircle cx='22' cy='22' r='9' fill='%23f2a20c'/%3E%3Cpath d='M12 50l10-16h30l-10 16z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="icon" href="icon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -16,7 +22,7 @@
 <div id="app">
   <aside id="side">
     <div class="head">
-      <h1>Calcul productible PV</h1>
+      <div class="brand"><img src="logo.svg" alt="" width="40" height="40"><h1>Calcul productible PV</h1></div>
       <p>Simulation horaire type PVsyst : pvlib, TMY PVGIS recalé sur Global Solar Atlas, fichiers .PAN / .OND.</p>
     </div>
     <div class="projbar">
