@@ -176,7 +176,7 @@ function buildForm() {
       chk('losses.inv_night', 'Consommation de nuit des onduleurs (.OND)') + num('losses.availability', 'Indisponibilité', '%')),
     section('p90', 'P50 / P90', num('p90.meteo_var', 'Variabilité météo interannuelle', '%', { step: 0.1, full: true, hint: 'Remplacée par la valeur calculée si le CSV mensuel PVGIS est déposé.' }) +
       drop('pvgis_monthly', '<span>CSV « Monthly data » de PVGIS (GHI mensuel par année)</span>') +
-      `<div class="fld full"><label>Autres incertitudes<i>écart-type %</i></label><div id="p90items"></div><button type="button" class="mini" id="addP90">+ Ajouter</button></div>` +
+      `<div class="fld full groups"><label>Autres incertitudes<i>écart-type %</i></label><div id="p90items"></div><button type="button" class="mini" id="addP90">+ Ajouter</button></div>` +
       num('lifetime.years', 'Années simulées', '', { step: 1, min: 1 }) + num('lifetime.degradation', 'Dégradation annuelle', '%/an', { step: 0.05 })),
   ].join('');
 
