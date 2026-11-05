@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -466,6 +466,13 @@ def face_irradiance(ctx, face):
 def check_design(pan, ond, cfg):
     ns = int(cfg['array']['n_series'])
     alerts = []
+    confs = cfg['structure'].get('shading_configs') or []
+    if confs:
+        tot = sum(float(c.get('share') or 0) for c in confs)
+        if abs(tot - 100) > 0.01:
+            alerts.append(dict(code='shading_share', level='block', title="Configurations d'ombrage électrique",
+                               value=round(tot, 2), limit=100, unit='%',
+                               message=f"La somme des parts de tables vaut {tot:.2f} % au lieu de 100 % : simulation bloquée."))
     if pan.get('mu_voc') is not None:
         voc_m10 = pan['voc'] + pan['mu_voc'] / 1000 * (-10 - 25)
     else:
@@ -514,6 +521,7 @@ DEFAULTS = dict(
     horizon=dict(use=True),
     structure=dict(type='fixed', tilt=16.0, azimuth=180.0, pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
+                   shading_configs=[dict(sub_in_height=None, share=100.0)],
                    axis_azimuth=180.0, max_angle=55.0, backtrack=True, axis_height=1.5),
     array=dict(n_series=27, n_strings=128),
     inverters=dict(groups=[[4, 21], [2, 22]], t_offset=0.0, p_inj_kw=None),
@@ -552,7 +560,7 @@ def default_sub_in_height(st, pan):
     return n_high * (2 if pan.get('half_cells') else 1)
 
 
-def simulate(cfg_in, files):
+def _simulate_one(cfg_in, files):
     cfg = merge(DEFAULTS, cfg_in)
     pan = parse_pan(files['pan'])
     ond = parse_ond(files['ond'])
@@ -821,28 +829,8 @@ def simulate(cfg_in, files):
 
     # --- P50 / P90
     y50 = float(mon.loc[13, 'Yield'])
-    p90cfg = cfg['p90']
-    meteo_var = p90cfg.get('meteo_var')
-    var_source = 'saisie'
-    if files.get('pvgis_monthly'):
-        try:
-            mv = parse_pvgis_monthly(files['pvgis_monthly'])
-            if mv['variability'] is not None:
-                meteo_var, var_source = 100 * mv['variability'], f"PVGIS mensuel {mv['years'][0]}-{mv['years'][-1]} ({len(mv['years'])} ans)"
-        except ValueError:
-            mv = None
-    items = [['Variabilité météo interannuelle', float(meteo_var or 0)]] + \
-        [[a, float(b)] for a, b in p90cfg['items']]
-    sigma = math.sqrt(sum(b ** 2 for a, b in items))
-    z = norm.ppf(0.9)
-    pxx = {p: y50 * (1 - norm.ppf(p / 100) * sigma / 100) for p in (75, 90, 99)}
-    p90 = dict(p50=y50, sigma_pct=sigma, items=items, meteo_var_source=var_source,
-               p75=pxx[75], p90=pxx[90], p99=pxx[99], p90_ratio=pxx[90] / y50,
-               p50_mwh=y50 * pkwp / 1000, p90_mwh=pxx[90] * pkwp / 1000, z90=z)
-    years = int(cfg['lifetime'].get('years', 1) or 1)
-    deg = float(cfg['lifetime'].get('degradation', 0) or 0) / 100
-    lifetime = [dict(annee=y, p50=y50 * (1 - deg) ** (y - 1), p90=pxx[90] * (1 - deg) ** (y - 1),
-                     e_p50_mwh=y50 * (1 - deg) ** (y - 1) * pkwp / 1000) for y in range(1, years + 1)]
+    p90, lifetime = compute_p90(y50, pkwp, cfg, files)
+    pxx = {90: p90['p90']}
 
     # --- trajectoires solaires pour le graphique de masque (solstices / équinoxe)
     sunpaths = []
@@ -879,6 +867,127 @@ def simulate(cfg_in, files):
                sunpaths=sunpaths, pan=_public(pan), ond=_public(ond),
                daily_kwh=[float(x) for x in (p_grid.groupby(p_grid.index.dayofyear).sum() / 1000).values])
     res['_hourly'] = hourly
+    return res
+
+
+def compute_p90(y50, pkwp, cfg, files):
+    """P50/P75/P90/P99 : sigma = racine de la somme des carrés, Px = P50 x (1 - z_x sigma)."""
+    p90cfg = cfg['p90']
+    meteo_var = p90cfg.get('meteo_var')
+    var_source = 'saisie'
+    if files.get('pvgis_monthly'):
+        try:
+            mv = parse_pvgis_monthly(files['pvgis_monthly'])
+            if mv['variability'] is not None:
+                meteo_var = 100 * mv['variability']
+                var_source = f"PVGIS mensuel {mv['years'][0]}-{mv['years'][-1]} ({len(mv['years'])} ans)"
+        except ValueError:
+            pass
+    items = [['Variabilité météo interannuelle', float(meteo_var or 0)]] + \
+        [[a, float(b)] for a, b in p90cfg['items']]
+    sigma = math.sqrt(sum(b ** 2 for a, b in items))
+    pxx = {p: y50 * (1 - norm.ppf(p / 100) * sigma / 100) for p in (75, 90, 99)}
+    p90 = dict(p50=y50, sigma_pct=sigma, items=items, meteo_var_source=var_source,
+               p75=pxx[75], p90=pxx[90], p99=pxx[99], p90_ratio=pxx[90] / y50 if y50 else None,
+               p50_mwh=y50 * pkwp / 1000, p90_mwh=pxx[90] * pkwp / 1000, z90=norm.ppf(0.9))
+    years = int(cfg['lifetime'].get('years', 1) or 1)
+    deg = float(cfg['lifetime'].get('degradation', 0) or 0) / 100
+    lifetime = [dict(annee=y, p50=y50 * (1 - deg) ** (y - 1), p90=pxx[90] * (1 - deg) ** (y - 1),
+                     e_p50_mwh=y50 * (1 - deg) ** (y - 1) * pkwp / 1000) for y in range(1, years + 1)]
+    return p90, lifetime
+
+
+def shading_configs(cfg, pan):
+    """Configurations d'ombrage électrique : [{sub_in_height, share (%), auto}]."""
+    st = cfg['structure']
+    confs = st.get('shading_configs') or [dict(sub_in_height=st.get('sub_in_height'), share=100.0)]
+    out = []
+    for c in confs:
+        n = c.get('sub_in_height')
+        auto = n in (None, '', 0)
+        out.append(dict(sub_in_height=int(default_sub_in_height(st, pan) if auto else n),
+                        share=float(c.get('share') or 0), auto=auto))
+    return out
+
+
+def simulate(cfg_in, files):
+    """Une étude de productible par configuration d'ombrage électrique, puis moyenne pondérée
+    (part des tables) de toutes les grandeurs : séries horaires, bilans mensuels, pertes, synthèse, P90."""
+    cfg = merge(DEFAULTS, cfg_in)
+    pan = parse_pan(files['pan'])
+    ond = parse_ond(files['ond'])
+    alerts = check_design(pan, ond, cfg)
+    if any(a['level'] == 'block' for a in alerts):
+        return dict(ok=False, blocked=True, alerts=alerts, pan=_public(pan), ond=_public(ond))
+    confs = shading_configs(cfg, pan)
+    runs = []
+    for c in confs:
+        if c['share'] <= 0:
+            continue
+        cc = json.loads(json.dumps(cfg))
+        cc['structure']['sub_in_height'] = c['sub_in_height']
+        cc['structure']['shading_configs'] = [dict(sub_in_height=c['sub_in_height'], share=100.0)]
+        r = _simulate_one(cc, files)
+        if not r.get('ok'):
+            r['alerts'] = check_design(pan, parse_ond(files['ond']), cfg)
+            return r
+        runs.append((c, r))
+    if not runs:
+        return dict(ok=False, blocked=True, alerts=check_design(pan, parse_ond(files['ond']), cfg),
+                    pan=_public(pan), ond=_public(parse_ond(files['ond'])))
+    tot = sum(c['share'] for c, _ in runs)
+    wts = [c['share'] / tot for c, _ in runs]
+    base = runs[0][1]
+
+    def wavg(get):
+        vals = [get(r) for _, r in runs]
+        if any(v is None for v in vals):
+            return vals[0]
+        return sum(w * v for w, v in zip(wts, vals))
+
+    res = dict(base)
+    res['config'] = cfg
+    res['alerts'] = check_design(pan, parse_ond(files['ond']), cfg)
+    # bilans mensuels : toutes les grandeurs sont linéaires (même GlobInc) -> moyenne pondérée exacte
+    res['monthly'] = []
+    for i, m in enumerate(base['monthly']):
+        row = dict(m)
+        for k, v in m.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                row[k] = wavg(lambda r, i=i, k=k: r['monthly'][i][k])
+        res['monthly'].append(row)
+    # diagramme de pertes : valeurs pondérées, pourcentages recalculés quand c'est possible
+    losses, prev = [], None
+    for i, l in enumerate(base['losses']):
+        row = dict(l)
+        row['value'] = wavg(lambda r, i=i: r['losses'][i]['value'])
+        if l['pct'] is not None:
+            row['pct'] = wavg(lambda r, i=i: r['losses'][i]['pct'])
+            if row['value'] is not None and prev not in (None, 0) and l['stage'] in ('irr', 'dc'):
+                row['pct'] = 100 * (row['value'] / prev - 1)
+        losses.append(row)
+        if row['value'] is not None:
+            prev = row['value']
+    res['losses'] = losses
+    summ = dict(base['summary'])
+    for k, v in base['summary'].items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in ('sub_in_height',):
+            summ[k] = wavg(lambda r, k=k: r['summary'][k])
+    summ['sub_in_height'] = ' / '.join(str(c['sub_in_height']) for c, _ in runs)
+    pkwp = summ['pnom_kwc']
+    res['p90'], res['lifetime'] = compute_p90(summ['yield_kwh_kwc'], pkwp, cfg, files)
+    summ['p90'], summ['p90_mwh'] = res['p90']['p90'], res['p90']['p90_mwh']
+    res['summary'] = summ
+    res['daily_kwh'] = [sum(w * r['daily_kwh'][j] for w, (_, r) in zip(wts, runs)) for j in range(len(base['daily_kwh']))]
+    hr = sum(w * r['_hourly'] for w, (_, r) in zip(wts, runs))
+    res['_hourly'] = hr.round(2)
+    res['shading_configs'] = []
+    for (c, r), w in zip(runs, wts):
+        el = next((l['pct'] for l in r['losses'] if l['label'].startswith('Ombrage électrique')), None)
+        res['shading_configs'].append(dict(sub_in_height=c['sub_in_height'], auto=c['auto'], share=c['share'],
+                                           weight=w, yield_kwh_kwc=r['summary']['yield_kwh_kwc'],
+                                           e_grid_mwh=r['summary']['e_grid_mwh'] * w, pr=r['summary']['pr'],
+                                           elec_loss_pct=el))
     return res
 
 
@@ -1025,6 +1134,19 @@ def export_xlsx(res):
     rows = [[l['annee'], l['p50'], l['p90'], l['e_p50_mwh']] for l in res['lifetime']]
     table(ws, r, ['Année', 'P50 kWh/kWc', 'P90 kWh/kWc', 'P50 MWh'], rows, [None, '0.0', '0.0', '#,##0.0'])
     widths(ws, [56, 18, 18, 14])
+
+    # Configurations d'ombrage électrique
+    if res.get('shading_configs'):
+        ws = wb.create_sheet('Ombrage électrique')
+        rows = [[i + 1, c['sub_in_height'], 'auto' if c['auto'] else 'saisi', c['share'] / 100,
+                 None if c['elec_loss_pct'] is None else c['elec_loss_pct'] / 100, c['yield_kwh_kwc'], c['pr'],
+                 c['e_grid_mwh']] for i, c in enumerate(res['shading_configs'])]
+        rows.append(['Total pondéré', '', '', sum(c['share'] for c in res['shading_configs']) / 100, None,
+                     res['summary']['yield_kwh_kwc'], res['summary']['pr'], res['summary']['e_grid_mwh']])
+        table(ws, 1, ['Configuration', 'Sous-chaînes en hauteur', 'Origine', 'Part des tables',
+                      'Perte ombrage électrique', 'Productible kWh/kWc', 'PR', 'Contribution MWh'], rows,
+              [None, '0', None, '0.00%', '+0.00%;-0.00%', '0.0', '0.0%', '#,##0.0'])
+        widths(ws, [16, 22, 10, 14, 22, 20, 10, 18])
 
     # Alertes
     ws = wb.create_sheet('Alertes')

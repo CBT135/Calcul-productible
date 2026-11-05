@@ -29,6 +29,7 @@
       <button type="button" id="btnNew" title="Nouveau projet (valeurs par défaut)">Nouveau</button>
       <label class="filebtn" title="Ouvrir un projet .json (saisies et fichiers)">Ouvrir<input type="file" id="openProject" accept=".json,application/json" hidden></label>
       <button type="button" id="btnSave" title="Enregistrer le projet (.json)">Enregistrer</button>
+      <button type="button" id="btnExample" title="Charger le projet test St-Seurin (TMY, horizon, GSA et paramètres ; .PAN et .OND à déposer)">Exemple</button>
     </div>
     <form id="form" autocomplete="off" onsubmit="return false"></form>
     <div class="foot">
@@ -64,6 +65,7 @@
         <div class="tab on" id="tab-synth">
           <div class="card"><h3>Production mensuelle</h3><div class="chartbox"><canvas id="chMonthly"></canvas></div></div>
           <div class="card"><h3>Bilans et résultats principaux</h3><div class="tblwrap" id="tblMonthly"></div></div>
+          <div class="card" id="shResults"></div>
           <div class="card"><h3>Production journalière</h3><div class="chartbox short"><canvas id="chDaily"></canvas></div></div>
         </div>
         <div class="tab" id="tab-losses"><div class="card"><h3>Diagramme de pertes</h3><div id="lossList"></div></div></div>

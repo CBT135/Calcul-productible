@@ -9,6 +9,7 @@ const DEFAULTS = {
   horizon: { use: true },
   structure: { type: 'fixed', tilt: 16, azimuth: 180, pitch: 9.01, width: 7.19, height: 0.80, n_rows: 17,
     n_high: 3, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
+    shading_configs: [{ sub_in_height: null, share: 100 }],
     axis_azimuth: 180, max_angle: 55, backtrack: true, axis_height: 1.5 },
   array: { n_series: 27, n_strings: 128 },
   inverters: { groups: [[4, 21], [2, 22]], t_offset: 0, p_inj_kw: null },
@@ -147,7 +148,9 @@ function buildForm() {
       sel('structure.orientation', 'Pose des modules', [['portrait', 'Portrait'], ['landscape', 'Paysage']]) +
       `<div class="fld"><label>GCR / angle limite</label><input type="text" id="gcrOut" readonly></div>`),
     section('shading', 'Ombrage électrique', num('structure.elec_effect', "Fraction de l'effet électrique", '%', { hint: 'Ombrage « selon les chaînes » de PVsyst.' }) +
-      num('structure.sub_in_height', 'Sous-chaînes en hauteur', '', { step: 1, min: 1, ph: 'auto', hint: 'Les chaînes suivent les rangées. Auto : 2 par module portrait en demi-cellules, 1 en cellules entières, 3 par module paysage.' })),
+      `<div class="fld full groups"><label>Configurations de câblage<i>sous-chaînes en hauteur · % des tables</i></label><div id="shconfs"></div>
+      <button type="button" class="mini" id="addShconf">+ Ajouter une configuration</button>
+      <div class="hint">Une étude de productible est calculée par configuration, puis les résultats sont moyennés au prorata des tables. Le total doit faire 100 %. Les chaînes suivent les rangées ; « auto » = 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, 3 par module paysage.</div></div>`),
     section('bifacial', 'Bifacial', chk('bifacial.enabled', 'Prendre en compte la face arrière') +
       num('bifacial.albedo_ground', 'Albédo du sol', '', { step: 0.01 }) + num('bifacial.rear_shading', 'Ombrage arrière', '%') +
       num('bifacial.rear_mismatch', 'Mismatch arrière', '%') + num('bifacial.transparent', 'Fraction transparente', '%')),
@@ -180,6 +183,11 @@ function buildForm() {
   $$('#stype button').forEach((b) => b.addEventListener('click', () => { set(S.cfg, 'structure.type', b.dataset.v); onChange('structure.type'); }));
   $$('[data-drop]').forEach(bindDrop);
   $('#addGroup').addEventListener('click', () => { S.cfg.inverters.groups.push([1, 10]); renderGroups(); onChange('inverters.groups'); });
+  $('#addShconf').addEventListener('click', () => {
+    const used = S.cfg.structure.shading_configs.reduce((a, c) => a + (Number(c.share) || 0), 0);
+    S.cfg.structure.shading_configs.push({ sub_in_height: 1, share: Math.max(0, +(100 - used).toFixed(2)) });
+    renderShconfs(); onChange('structure.shading_configs');
+  });
   $('#addP90').addEventListener('click', () => { S.cfg.p90.items.push(['Autre', 1.0]); renderP90Items(); onChange('p90.items'); });
   $('#gsaPaste').addEventListener('input', (e) => { const t = e.target.value.trim(); if (t) loadGsaText(t, 'collé'); });
 }
@@ -189,7 +197,7 @@ function fillForm() {
     const v = get(S.cfg, el.dataset.path);
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v == null ? '' : v;
   });
-  renderGroups(); renderP90Items(); applyVisibility();
+  renderGroups(); renderShconfs(); renderP90Items(); applyVisibility();
 }
 
 function applyVisibility() {
@@ -212,6 +220,27 @@ function renderGroups() {
   }));
   $$('#groups [data-del]').forEach((b) => b.addEventListener('click', () => {
     if (S.cfg.inverters.groups.length > 1) { S.cfg.inverters.groups.splice(Number(b.dataset.del), 1); renderGroups(); onChange('inverters.groups'); }
+  }));
+}
+function shTotal() { return S.cfg.structure.shading_configs.reduce((a, c) => a + (Number(c.share) || 0), 0); }
+function renderShconfs() {
+  const L2 = S.cfg.structure.shading_configs;
+  const auto = S.check && S.check.sub_in_height ? `auto (${S.check.sub_in_height})` : 'auto';
+  $('#shconfs').innerHTML = L2.map((c, i) => `<div class="grow" style="grid-template-columns:auto 1fr 1fr 28px">
+    <span style="font-weight:600;color:var(--ink)">Config. ${i + 1}</span>
+    <input type="number" min="1" step="1" value="${c.sub_in_height ?? ''}" placeholder="${auto}" data-sh="${i},sub_in_height" title="Sous-chaînes en hauteur">
+    <input type="number" min="0" max="100" step="0.01" value="${c.share}" data-sh="${i},share" title="Part des tables (%)">
+    <button type="button" data-shdel="${i}" title="Supprimer" ${L2.length < 2 ? 'disabled style="visibility:hidden"' : ''}>×</button></div>`).join('') +
+    `<div class="grow" style="grid-template-columns:auto 1fr 1fr 28px"><span></span><span>sous-chaînes en hauteur</span>
+    <span id="shTot" style="font-weight:600;color:${Math.abs(shTotal() - 100) > 0.01 ? 'var(--block)' : 'var(--ok)'}">total ${nf(shTotal(), 2)} %</span><span></span></div>`;
+  $$('#shconfs [data-sh]').forEach((el) => el.addEventListener('input', () => {
+    const [i, k] = el.dataset.sh.split(',');
+    L2[+i][k] = el.value === '' ? (k === 'share' ? 0 : null) : Number(el.value);
+    const t = $('#shTot'); t.textContent = `total ${nf(shTotal(), 2)} %`; t.style.color = Math.abs(shTotal() - 100) > 0.01 ? 'var(--block)' : 'var(--ok)';
+    onChange('structure.shading_configs');
+  }));
+  $$('#shconfs [data-shdel]').forEach((b) => b.addEventListener('click', () => {
+    if (L2.length > 1) { L2.splice(Number(b.dataset.shdel), 1); renderShconfs(); onChange('structure.shading_configs'); }
   }));
 }
 function renderP90Items() {
@@ -384,8 +413,7 @@ function renderDerived() {
     la = ` · angle limite ${nf(Math.atan(Math.sin(t) / (r - Math.cos(t))) * 180 / Math.PI, 1)}°`;
   }
   $('#gcrOut').value = `GCR ${pf(gcr, 1)}${la}`;
-  const sub = $('[data-path="structure.sub_in_height"]');
-  if (sub && S.check) sub.placeholder = `auto (${S.check.sub_in_height})`;
+  if (S.check && S.check.sub_in_height) $$('#shconfs [data-sh$=",sub_in_height"]').forEach((el) => (el.placeholder = `auto (${S.check.sub_in_height})`));
   // résumés des sections
   const ond = S.info.ond && !S.info.ond.error ? S.info.ond : null;
   const ninv = c.inverters.groups.reduce((a, g) => a + g[0], 0);
@@ -397,7 +425,7 @@ function renderDerived() {
     module: pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
     inverter: ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
     structure: { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt}°` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
-    shading: `${c.structure.elec_effect} % · ${c.structure.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} en hauteur`,
+    shading: `${c.structure.elec_effect} % · ` + c.structure.shading_configs.map((x) => `${x.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} (${nf(x.share, 2)} %)`).join(' + '),
     bifacial: c.bifacial.enabled ? `albédo ${c.bifacial.albedo_ground}` : 'non',
     thermal: `Uc ${c.thermal.uc} · ${c.iam.mode === 'pan' ? 'IAM .PAN' : 'Fresnel'}`,
     dc: `${nf(c.losses.soiling, 1)} + ${nf(c.losses.lid, 1)} + ${nf(c.losses.mismatch, 1)} + ${nf(c.losses.dc_ohmic, 1)} %`,
@@ -485,9 +513,16 @@ function renderResults() {
   // tableau mensuel
   const rows = r.monthly.map((m, i) => `<tr class="${i === 12 ? 'tot' : ''}"><td>${m.mois}</td><td>${nf(m.ghi, 1)}</td><td>${nf(m.dhi, 1)}</td><td>${nf(m.t_amb, 1)}</td><td>${nf(m.glob_inc, 1)}</td><td>${nf(m.glob_eff, 1)}</td><td>${nf(m.rear_inc, 1)}</td><td>${nf(m.e_array, 1)}</td><td>${nf(m.e_grid, 1)}</td><td>${nf(m.yield_, 1)}</td><td>${pf(m.pr, 1)}</td><td>${pf(m.pr_bifi, 1)}</td></tr>`).join('');
   $('#tblMonthly').innerHTML = `<table class="res"><tr><th>Mois</th><th>GHI<br>kWh/m²</th><th>DIF<br>kWh/m²</th><th>T amb<br>°C</th><th>GlobInc<br>kWh/m²</th><th>GlobEff<br>kWh/m²</th><th>Arrière<br>kWh/m²</th><th>E champ<br>MWh</th><th>E injectée<br>MWh</th><th>Productible<br>kWh/kWc</th><th>PR</th><th>PR bifacial</th></tr>${rows}</table>`;
+  $('#shResults').innerHTML = shConfTable(r);
   drawCharts(); renderLosses(); renderMeteo(); renderP90(); renderHyp();
 }
 
+function shConfTable(r) {
+  const L2 = r.shading_configs || []; if (!L2.length) return '';
+  return `<h3>Configurations d'ombrage électrique</h3><div class="tblwrap"><table class="res"><tr><th>Configuration</th><th>Sous-chaînes en hauteur</th><th>Part des tables</th><th>Perte ombrage électrique</th><th>Productible kWh/kWc</th><th>PR</th><th>Contribution MWh</th></tr>` +
+    L2.map((c, i) => `<tr><td>Config. ${i + 1}</td><td>${c.sub_in_height}${c.auto ? ' (auto)' : ''}</td><td>${nf(c.share, 2)} %</td><td>${nf(c.elec_loss_pct, 2)} %</td><td>${nf(c.yield_kwh_kwc, 1)}</td><td>${pf(c.pr, 1)}</td><td>${nf(c.e_grid_mwh, 1)}</td></tr>`).join('') +
+    `<tr class="tot"><td>Moyenne pondérée</td><td></td><td>${nf(L2.reduce((a, c) => a + c.share, 0), 2)} %</td><td>${nf((r.losses.find((l) => l.label.startsWith('Ombrage électrique')) || {}).pct, 2)} %</td><td>${nf(r.summary.yield_kwh_kwc, 1)}</td><td>${pf(r.summary.pr, 1)}</td><td>${nf(r.summary.e_grid_mwh, 1)}</td></tr></table></div>`;
+}
 function chart(id, cfg) { if (S.charts[id]) S.charts[id].destroy(); S.charts[id] = new Chart($('#' + id), cfg); return S.charts[id]; }
 Chart.defaults.animation = false; Chart.defaults.font.family = 'Inter, system-ui, sans-serif'; Chart.defaults.font.size = 11.5; Chart.defaults.color = '#5d6b7a';
 function drawCharts() {
@@ -575,7 +610,7 @@ function renderHyp() {
     ['Tension MPP moyenne', `${nf(s.vmpp_mean)} V`]])}</div><div>${kv([
     ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}°, ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°` }[c.structure.type]],
     ['Géométrie', `entraxe ${c.structure.pitch} m · largeur ${c.structure.width} m · GCR ${pf(s.gcr, 1)}${s.limit_angle != null ? ` · angle limite ${nf(s.limit_angle, 1)}°` : ''} · ${c.structure.n_rows} rangées`],
-    ['Ombrage électrique', `${c.structure.elec_effect} % · ${s.sub_in_height} sous-chaînes en hauteur`],
+    ['Ombrage électrique', `${c.structure.elec_effect} % · ` + (r.shading_configs || []).map((x) => `${x.sub_in_height} sous-chaînes en hauteur sur ${nf(x.share, 2)} % des tables`).join(' + ')],
     ['Ombrage proche du diffus', r.faces.map((f) => `${f.name} ${pf(f.diffuse_attenuation, 1)}`).join(', ')],
     ['Bifacial', c.bifacial.enabled ? `albédo sol ${c.bifacial.albedo_ground} · ombrage arrière ${c.bifacial.rear_shading} % · mismatch ${c.bifacial.rear_mismatch} %` : 'non'],
     ['Thermique', `Uc ${c.thermal.uc} · Uv ${c.thermal.uv}`], ['IAM', c.iam.mode === 'pan' ? 'profil du .PAN' : `Fresnel n=${c.iam.n}, n(AR)=${c.iam.n_ar ?? '–'}`],
@@ -602,12 +637,21 @@ function saveProject() {
 }
 $('#openProject').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  try {
-    const d = JSON.parse(await f.text()); if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
-    S.cfg = deepMerge(DEFAULTS, d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null;
-    $('#results').hidden = true; fillForm(); save(); refreshAll(); setStatus(`Projet « ${S.cfg.project.name} » ouvert.`, 'ok', 100);
-  } catch (err) { setStatus('Ouverture impossible : ' + err.message, 'err', 100); }
+  try { loadProject(JSON.parse(await f.text())); } catch (err) { setStatus('Ouverture impossible : ' + err.message, 'err', 100); }
   e.target.value = '';
+});
+function loadProject(d, keepModuleFiles) {
+  if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
+  const keep = keepModuleFiles ? { pan: S.files.pan, ond: S.files.ond, npan: S.names.pan, nond: S.names.ond } : null;
+  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null;
+  if (keep) { if (keep.pan && !S.files.pan) { S.files.pan = keep.pan; S.names.pan = keep.npan; } if (keep.ond && !S.files.ond) { S.files.ond = keep.ond; S.names.ond = keep.nond; } }
+  $('#results').hidden = true; fillForm(); syncStrings(); save(); refreshAll();
+  setStatus(`Projet « ${S.cfg.project.name} – ${S.cfg.project.variant} » ouvert.` + (d.note ? ' ' + d.note : ''), 'ok', 100);
+}
+$('#btnExample').addEventListener('click', async () => {
+  setStatus('Chargement du projet test St-Seurin…', 'busy', 50);
+  try { loadProject(await (await fetch('exemples/St-Seurin_Var0.json')).json(), true); }
+  catch (err) { setStatus('Projet test indisponible : ' + err.message, 'err', 100); }
 });
 $('#btnNew').addEventListener('click', () => {
   if (!confirm('Repartir d\'un projet vierge ? Les saisies et fichiers actuels seront effacés.')) return;
@@ -640,6 +684,7 @@ $('#expPdf').addEventListener('click', () => {
     <div><table><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}</table></div></div>
     ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
+    ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
     <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
     <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle une diode PVsyst, courbes .OND). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
   $('#report').innerHTML = html;
@@ -648,9 +693,16 @@ $('#expPdf').addEventListener('click', () => {
 });
 
 // ------------------------------------------------------------------ persistance locale
+// Projets enregistrés avant les configurations multiples : reprise du nombre de sous-chaînes saisi.
+function migrate(raw) {
+  const cfg = deepMerge(DEFAULTS, raw || {});
+  const rs = (raw && raw.structure) || {};
+  if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
+  return cfg;
+}
 function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = deepMerge(DEFAULTS, d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; } } catch (e) { /* ignore */ }
+  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; } } catch (e) { /* ignore */ }
 }
 
 load(); buildForm(); fillForm(); syncStrings(); initMap(); refreshAll();

@@ -30,7 +30,7 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 - **Masque lointain** : le direct est coupé sous la ligne d'horizon. Le diffus isotrope et la bande d'horizon sont réduits d'un facteur intégré sur la voûte céleste vue par le plan.
 - **Transposition** : Perez (isotrope, circumsolaire et bande d'horizon séparés).
 - **Ombrages proches** : modèle 1D de rangées infinies (`shaded_fraction1d`), première rangée non ombrée, perte de vue du ciel pour le diffus.
-- **Ombrage électrique** « selon les chaînes » (fraction paramétrable) : les chaînes suivent les rangées. Par défaut, on compte 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, et 3 par module paysage.
+- **Ombrage électrique** « selon les chaînes », avec une ou plusieurs configurations (sous-chaînes en hauteur × part des tables, total 100 %). Une étude complète est calculée par configuration, puis toutes les grandeurs sont moyennées au prorata des tables. Fraction de l'effet électrique paramétrable ; les chaînes suivent les rangées. En mode « auto », on compte 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, et 3 par module paysage.
 - **Face arrière** : pvlib *infinite sheds* (Hay-Davies), avec ombrage arrière, mismatch arrière et fraction transparente.
 - **IAM** : Fresnel avec couche antireflet, ou profil utilisateur du `.PAN`.
 - **Module** : modèle à une diode PVsyst (`calcparams_pvsyst`). Les paramètres Rs, Rsh(G), γ, μγ et μIsc sont lus dans le `.PAN`. IL et I0 sont calculés à partir d'Isc et de Voc.
@@ -61,6 +61,10 @@ open('resultats.xlsx', 'wb').write(P.export_xlsx(res))
 ```
 
 Dépendances : `pvlib>=0.13`, `numpy`, `pandas`, `scipy`, `openpyxl`.
+
+## Projet test
+
+`exemples/St-Seurin_Var0.json` (bouton **Exemple**) : centrale au sol de 2 229 kWc en sheds fixes 16° plein sud, bifaciale. Il contient le TMY PVGIS 5.3 sans horizon, l'horizon PVGIS, les données mensuelles PVGIS et les valeurs Global Solar Atlas. L'ombrage électrique y est réparti en deux configurations : 6 sous-chaînes en hauteur sur 86,72 % des tables, 1 sous-chaîne sur 13,28 %. Les fichiers .PAN (JKM645N-66HL4M-BDV) et .OND (SUN2000-330KTL-H1) ne sont pas publiés : il faut les déposer. S'ils sont déjà chargés dans l'application, ils sont conservés.
 
 ## Licence et crédits
 
