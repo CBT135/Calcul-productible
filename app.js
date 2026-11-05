@@ -990,8 +990,94 @@ $$('#tabs button').forEach((b) => b.addEventListener('click', () => {
   Object.values(S.charts).forEach((c) => c.resize());
 }));
 
-$('#expPdf').addEventListener('click', () => {
+// ------------------------------------------------------------------ vues aériennes du rapport (IGN, WMS)
+const ROOF_COLORS = ['#f2a20c', '#4fc3f7', '#e5484d', '#46a758', '#8e4ec6', '#f76b15', '#12a594', '#d6409f'];
+function merc(lat, lon) { const R = 6378137; return [R * lon * Math.PI / 180, R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360))]; }
+// Image aérienne centrée sur (lat, lon), largeur au sol widthM ; draw(ctx, px) dessine par-dessus (px : [lat, lon] -> pixels)
+function aerialImage(lat, lon, widthM, W, H, draw) {
+  const k = 1 / Math.cos(lat * Math.PI / 180), [cx, cy] = merc(lat, lon);
+  const hw = widthM * k / 2, hh = hw * H / W;
+  const bbox = [cx - hw, cy - hh, cx + hw, cy + hh];
+  const url = 'https://data.geopf.fr/wms-r?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ORTHOIMAGERY.ORTHOPHOTOS&STYLES=&CRS=EPSG:3857'
+    + `&BBOX=${bbox.join(',')}&WIDTH=${W}&HEIGHT=${H}&FORMAT=image/jpeg`;
+  const px = ([la, lo]) => { const [x, y] = merc(la, lo); return [(x - bbox[0]) / (bbox[2] - bbox[0]) * W, (bbox[3] - y) / (bbox[3] - bbox[1]) * H]; };
+  return new Promise((resolve) => {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    const t = setTimeout(() => resolve(null), 15000);
+    img.onload = () => {
+      clearTimeout(t);
+      try {
+        const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
+        ctx.drawImage(img, 0, 0, W, H); draw(ctx, px);
+        // échelle graphique
+        const mpp = widthM / W, nice = [5, 10, 20, 25, 50, 100, 200, 250, 500].find((v) => v / mpp > W / 7) || 500, len = nice / mpp;
+        ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(10, H - 30, len + 50, 22);
+        ctx.fillStyle = '#18212b'; ctx.fillRect(16, H - 16, len, 4); ctx.font = '600 12px Inter, sans-serif'; ctx.fillText(`${nice} m`, len + 22, H - 13);
+        ctx.font = '11px Inter, sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillRect(W - 128, H - 20, 128, 20);
+        ctx.fillStyle = '#18212b'; ctx.fillText('© IGN – Géoplateforme', W - 122, H - 6);
+        // nord
+        ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.arc(W - 24, 26, 16, 0, 7); ctx.fill();
+        ctx.fillStyle = '#18212b'; ctx.beginPath(); ctx.moveTo(W - 24, 13); ctx.lineTo(W - 30, 30); ctx.lineTo(W - 18, 30); ctx.fill();
+        ctx.font = '700 10px Inter, sans-serif'; ctx.fillText('N', W - 27.5, 40);
+        resolve(cv.toDataURL('image/jpeg', 0.88));
+      } catch (e) { resolve(null); }
+    };
+    img.onerror = () => { clearTimeout(t); resolve(null); };
+    img.src = url;
+  });
+}
+function siteAerial(c) {
+  return aerialImage(c.site.lat, c.site.lon, 320, 1000, 520, (ctx, px) => {
+    const [x, y] = px([c.site.lat, c.site.lon]);
+    ctx.fillStyle = '#f2a20c'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.bezierCurveTo(x - 14, y - 20, x - 14, y - 38, x, y - 38); ctx.bezierCurveTo(x + 14, y - 38, x + 14, y - 20, x, y); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#18212b'; ctx.beginPath(); ctx.arc(x, y - 27, 5, 0, 7); ctx.fill();
+  });
+}
+function roofsAerial(c) {
+  const F = (c.structure.fields || []).map((f, i) => ({ f, i })).filter(({ f }) => f.geom && f.geom.length === 4);
+  if (!F.length) return Promise.resolve(null);
+  const pts = F.flatMap(({ f }) => f.geom);
+  const lat0 = pts.reduce((a, p) => a + p[0], 0) / pts.length, lon0 = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  const xs = pts.map((p) => (p[1] - lon0) * Math.cos(lat0 * Math.PI / 180) * 111320), ys = pts.map((p) => (p[0] - lat0) * 110540);
+  const W = 1000, H = 560;
+  const span = Math.max(30, (Math.max(...xs) - Math.min(...xs)) * 1.5, (Math.max(...ys) - Math.min(...ys)) * 1.5 * W / H);
+  const latc = lat0 + (Math.max(...ys) + Math.min(...ys)) / 2 / 110540, lonc = lon0 + (Math.max(...xs) + Math.min(...xs)) / 2 / (Math.cos(lat0 * Math.PI / 180) * 111320);
+  return aerialImage(latc, lonc, span, W, H, (ctx, px) => {
+    F.forEach(({ f, i }) => {
+      const col = ROOF_COLORS[i % ROOF_COLORS.length], q = f.geom.map(px);
+      ctx.fillStyle = col + '55'; ctx.strokeStyle = col; ctx.lineWidth = 3;
+      ctx.beginPath(); q.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.fill(); ctx.stroke();
+      // flèche vers le bas de pente (face des modules)
+      const m = [(q[0][0] + q[1][0]) / 2, (q[0][1] + q[1][1]) / 2], top = [(q[2][0] + q[3][0]) / 2, (q[2][1] + q[3][1]) / 2];
+      const cxy = [(m[0] + top[0]) / 2, (m[1] + top[1]) / 2];
+      const d = [m[0] - top[0], m[1] - top[1]], l = Math.hypot(d[0], d[1]) || 1, u = [d[0] / l, d[1] / l], a = Math.min(26, l * 0.35);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cxy[0] - u[0] * a, cxy[1] - u[1] * a); ctx.lineTo(cxy[0] + u[0] * a, cxy[1] + u[1] * a); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); const tip = [cxy[0] + u[0] * (a + 8), cxy[1] + u[1] * (a + 8)];
+      ctx.moveTo(tip[0], tip[1]); ctx.lineTo(tip[0] - u[0] * 12 - u[1] * 7, tip[1] - u[1] * 12 + u[0] * 7); ctx.lineTo(tip[0] - u[0] * 12 + u[1] * 7, tip[1] - u[1] * 12 - u[0] * 7); ctx.fill();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(cxy[0] - u[0] * (a + 14), cxy[1] - u[1] * (a + 14), 13, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#18212b'; ctx.font = '700 13px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), cxy[0] - u[0] * (a + 14), cxy[1] - u[1] * (a + 14)); ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+    });
+  });
+}
+function roofsLegend(r, c) {
+  const F = r.fields || [];
+  return `<table class="legend"><tr><th></th><th>Champ</th><th>Inclinaison / orientation</th><th>Zone (selon la pente)</th><th>Calepinage</th><th>kWc</th><th>Productible</th></tr>` +
+    F.map((f, i) => { const g = (c.structure.fields[i] || {}).geom; return `<tr><td><span class="sw" style="background:${ROOF_COLORS[i % ROOF_COLORS.length]}">${i + 1}</span></td><td>${esc(f.name)}${g ? '' : ' <i>(non relevé sur la vue aérienne)</i>'}</td><td>${nf(f.tilt, 0)}° / ${nf(f.azimuth, 0)}°</td><td>${nf(f.length, 2)} × ${nf(f.height, 2)} m</td><td>${f.n_h} × ${f.n_v}</td><td>${nf(f.pnom_kwc, 2)}</td><td>${nf(f.yield_kwh_kwc, 0)} kWh/kWc</td></tr>`; }).join('') +
+    `</table><p class="cap">Les flèches indiquent la direction vers laquelle les modules sont orientés (bas de pente).</p>`;
+}
+
+$('#expPdf').addEventListener('click', async () => {
   const r = S.res, s = r.summary, c = r.config, p = r.p90;
+  setStatus('Préparation du rapport (vues aériennes)…', 'busy', 60);
+  const [siteImg, roofImg] = await Promise.all([siteAerial(c), r.fields ? roofsAerial(c) : Promise.resolve(null)]);
+  setStatus('Rapport prêt : boîte de dialogue d\'impression.', 'ok', 100);
+  const aerialSite = siteImg ? `<figure class="aerial"><img src="${siteImg}"><figcaption>Vue aérienne du site (${nf(c.site.lat, 5)} °N / ${nf(c.site.lon, 5)} °E)</figcaption></figure>`
+    : '<p class="cap">Vue aérienne indisponible (hors couverture IGN ou réseau).</p>';
+  const aerialRoofs = !r.fields ? '' : roofImg ? `<h2>Implantation des toits</h2><figure class="aerial"><img src="${roofImg}"></figure>${roofsLegend(r, c)}`
+    : `<h2>Implantation des toits</h2><p class="cap">Aucun toit relevé sur la vue aérienne (bouton « Vue aérienne » de chaque toit).</p>${roofsLegend(r, c)}`;
   const img = (id) => { const ch = S.charts[id]; return ch ? `<img src="${ch.toBase64Image('image/png', 1)}">` : ''; };
   // forcer le rendu des graphiques cachés
   $$('.tab').forEach((t) => t.classList.add('on')); Object.values(S.charts).forEach((ch) => { ch.resize(); ch.update('none'); });
@@ -1001,6 +1087,7 @@ $('#expPdf').addEventListener('click', () => {
     <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50)</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
     <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
     <div>${kv([['Modules', r.fields ? [...new Set(r.fields.map((f) => f.module))].map(esc).join(', ') + ` · ${nf(s.n_modules)} modules` : `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', r.fields ? `${s.n_inverters} : ` + [...new Set(r.fields.map((f) => f.inverter))].map(esc).join(', ') : `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
+    ${aerialSite}
     <h2>Vérifications de dimensionnement</h2><table><tr><th>Vérification</th><th>Statut</th><th>Détail</th></tr>${r.alerts.map((a) => `<tr><td>${esc(a.title)}</td><td>${{ ok: 'OK', warn: 'Alerte', block: 'Bloquant' }[a.level]}</td><td>${esc(a.message)}</td></tr>`).join('')}</table>
     <h2>Résultats mensuels</h2>${img('chMonthly')}
     <table><tr><th>Mois</th><th>GHI</th><th>DIF</th><th>T amb</th><th>GlobInc</th><th>GlobEff</th><th>Arrière</th><th>E champ MWh</th><th>E injectée MWh</th><th>kWh/kWc</th><th>PR</th></tr>${r.monthly.map((m, i) => `<tr class="${i === 12 ? 'tot' : ''}"><td>${m.mois}</td><td>${nf(m.ghi, 1)}</td><td>${nf(m.dhi, 1)}</td><td>${nf(m.t_amb, 1)}</td><td>${nf(m.glob_inc, 1)}</td><td>${nf(m.glob_eff, 1)}</td><td>${nf(m.rear_inc, 1)}</td><td>${nf(m.e_array, 1)}</td><td>${nf(m.e_grid, 1)}</td><td>${nf(m.yield_, 1)}</td><td>${pf(m.pr, 1)}</td></tr>`).join('')}</table>
@@ -1009,7 +1096,7 @@ $('#expPdf').addEventListener('click', () => {
     <div><table><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}</table></div></div>
     ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
-    ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
+    ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') + aerialRoofs : ''}
     ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
     <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
     <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle à une diode, courbes de rendement onduleur). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;

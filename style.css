@@ -158,6 +158,11 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
   #report .kpis div{flex:1;border:1px solid #ccc;border-radius:2mm;padding:2.5mm}
   #report .kpis b{display:block;font-size:14pt}
   #report .cols{display:flex;gap:6mm} #report .cols>div{flex:1}
+  #report figure.aerial{margin:4mm 0 2mm;page-break-inside:avoid}
+  #report figure.aerial img{width:100%;border-radius:2mm}
+  #report figcaption,#report .cap{color:#5d6b7a;font-size:8.5pt;margin-top:1mm}
+  #report table.legend td:first-child{width:8mm}
+  #report .sw{display:inline-block;width:6mm;height:6mm;border-radius:50%;color:#18212b;font-weight:700;font-size:8pt;text-align:center;line-height:6mm;border:1px solid #fff}
   #report .foot{color:#5d6b7a;font-size:8.5pt;margin-top:6mm}
   * {-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
