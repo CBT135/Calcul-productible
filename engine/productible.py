@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.2.0"
+ENGINE_VERSION = "1.3.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -396,6 +396,21 @@ def face_irradiance(ctx, face):
         f_hz = 1.0
     d_iso_h, d_hor_h = d_iso * f_hz, d_hor * f_hz
     glob_inc = (beam + d_iso_h + d_circ + d_hor_h + d_gnd).where(day, 0)       # après masque lointain
+    # masque proche propre au champ (toiture) : direct coupé sous son profil, diffus réduit sur le masque combiné
+    near = ctx.get('near')
+    if near is not None:
+        hsun = 90 - zen
+        vis_n = pd.Series((hsun.values > horizon_height(near, azi.values - 180)).astype(float), index=w.index)
+        beam_vis = beam_vis * vis_n
+        dni_eff = w.dni * beam_vis
+        beam = beam0 * beam_vis
+        d_circ = d_circ0 * beam_vis
+        grid_az = np.arange(-180, 181, 1.0)
+        comb = np.column_stack([grid_az, np.maximum(horizon_height(near, grid_az),
+                                                     horizon_height(hz, grid_az) if hz is not None else 0.0)])
+        f_c = _horizon_diffuse_factor(comb, face['tilt'], face['azimuth'])
+        d_iso_h, d_hor_h = d_iso * f_c, d_hor * f_c
+    glob_inc_near = (beam + d_iso_h + d_circ + d_hor_h + d_gnd).where(day, 0)   # après masque proche du champ
 
     # ombrages proches 1D entre rangées
     fs = shading.shaded_fraction1d(zen, azi, axis_azimuth=axis_az, shaded_row_rotation=rot,
@@ -452,7 +467,7 @@ def face_irradiance(ctx, face):
     nh = max(int(ctx['sub_in_height']), 1)
     f_str = np.ceil(fs * nh - 1e-9) / nh
     elec_irr = (ctx['elec_effect'] * (f_str - fs).clip(lower=0) * edge * (beam + d_circ) * soil * iam_b)
-    return dict(glob_inc0=glob_inc0, glob_inc=glob_inc, front_after_shade=front_after_shade,
+    return dict(glob_inc0=glob_inc0, glob_inc=glob_inc, glob_inc_near=glob_inc_near, front_after_shade=front_after_shade,
                 front_soil=front_after_shade * soil, front_eff=front_eff, rear_inc=rear_inc,
                 rear_eff=rear_eff, elec_irr=elec_irr.where(day, 0), shaded_fraction=fs,
                 diff_att=float(diff_att[day].mean()) if day.any() else 0.0,
@@ -463,6 +478,196 @@ def face_irradiance(ctx, face):
 # ======================================================================================
 # 4. Alertes de dimensionnement
 # ======================================================================================
+def roof_layout(f, pan):
+    """Calepinage d'un champ de toiture : nombre de modules en largeur et en hauteur (forçables)."""
+    portrait = (f.get('orientation') or 'portrait') == 'portrait'
+    mw, mh = (pan['width'], pan['height']) if portrait else (pan['height'], pan['width'])
+    gap = float(f.get('gap') or 0)
+    L, H = float(f.get('length') or 0), float(f.get('height') or 0)
+    n_h = int(math.floor((L + gap) / (mw + gap) + 1e-9)) if L > 0 else 0
+    n_v = int(math.floor((H + gap) / (mh + gap) + 1e-9)) if H > 0 else 0
+    n_h_f = int(f['n_h']) if f.get('n_h') not in (None, '', 0) else n_h
+    n_v_f = int(f['n_v']) if f.get('n_v') not in (None, '', 0) else n_v
+    return dict(n_h_calc=n_h, n_v_calc=n_v, n_h=n_h_f, n_v=n_v_f, n_modules=n_h_f * n_v_f,
+                pnom_kwc=n_h_f * n_v_f * pan['pnom'] / 1000, module_w=mw, module_h=mh,
+                used_length=n_h_f * mw + max(n_h_f - 1, 0) * gap, used_height=n_v_f * mh + max(n_v_f - 1, 0) * gap)
+
+
+def _lib(files, kind, idx):
+    """Fichier .PAN / .OND n° idx : 0 = fichier principal, 1.. = fichiers supplémentaires."""
+    idx = int(idx or 0)
+    if idx == 0:
+        return files.get(kind)
+    extra = files.get(kind + '_extra') or []
+    return extra[idx - 1] if 0 < idx <= len(extra) else None
+
+
+def check_project(cfg, files):
+    """Contrôles de dimensionnement de tout le projet (champ par champ en toiture)."""
+    st = cfg['structure']
+    if st.get('type') != 'roof':
+        return check_design(parse_pan(files['pan']), parse_ond(files['ond']), cfg)
+    alerts = []
+    fields = st.get('fields') or []
+    if not fields:
+        return [dict(code='roof', level='block', title='Toiture', value=None, limit=None, unit='',
+                     message='Aucun champ défini : ajouter au moins un toit.')]
+    for k, f in enumerate(fields):
+        nm = f.get('name') or f'Champ {k + 1}'
+        pt, ot = _lib(files, 'pan', f.get('module')), _lib(files, 'ond', f.get('inverter'))
+        if not pt or not ot:
+            alerts.append(dict(code='roof_files', level='block', title=nm, value=None, limit=None, unit='',
+                               message='Module ou onduleur non affecté (fichier manquant).'))
+            continue
+        pan, ond = parse_pan(pt), parse_ond(ot)
+        lay = roof_layout(f, pan)
+        n_inv, n_str = int(f.get('n_inv') or 0), int(f.get('n_str') or 0)
+        wired = int(f.get('n_series') or 0) * n_inv * n_str
+        cc = json.loads(json.dumps(cfg))
+        cc['array'] = dict(n_series=int(f.get('n_series') or 0), n_strings=n_inv * n_str)
+        cc['inverters']['groups'] = [[n_inv, n_str]]
+        cc['structure']['shading_configs'] = []
+        for a in check_design(pan, ond, cc):
+            a['title'] = f"{nm} – {a['title']}"
+            alerts.append(a)
+        if wired > lay['n_modules']:
+            alerts.append(dict(code='roof_layout', level='block', title=f'{nm} – Calepinage', value=wired,
+                               limit=lay['n_modules'], unit='modules',
+                               message=f"{wired} modules câblés pour {lay['n_modules']} modules posables "
+                                       f"({lay['n_h']} × {lay['n_v']}) : simulation bloquée."))
+        elif wired < lay['n_modules']:
+            alerts.append(dict(code='roof_layout', level='warn', title=f'{nm} – Calepinage', value=wired,
+                               limit=lay['n_modules'], unit='modules',
+                               message=f"{lay['n_modules'] - wired} module(s) posable(s) non câblé(s) "
+                                       f"({wired} câblés sur {lay['n_modules']}) : seuls les modules câblés sont simulés."))
+    return alerts
+
+
+def _simulate_roof(cfg, files):
+    """Toiture : une simulation par champ (inclinaison, orientation, module, onduleurs, masque proche),
+    puis cumul des énergies et moyenne pondérée par la puissance des grandeurs spécifiques."""
+    alerts = check_project(cfg, files)
+    if any(a['level'] == 'block' for a in alerts):
+        return dict(ok=False, blocked=True, alerts=alerts)
+    fields = cfg['structure']['fields']
+    # puissances AC des champs, pour répartir transformateur, auxiliaires et limite d'injection
+    pac = []
+    for f in fields:
+        o = parse_ond(_lib(files, 'ond', f.get('inverter')))
+        pac.append(o['pmax'] * int(f.get('n_inv') or 0))
+    pac_tot = sum(pac) or 1.0
+    runs = []
+    near_masks = files.get('near_masks') or {}
+    for k, f in enumerate(fields):
+        share = pac[k] / pac_tot
+        cc = json.loads(json.dumps(cfg))
+        s2 = cc['structure']
+        pan = parse_pan(_lib(files, 'pan', f.get('module')))
+        s2.update(type='fixed', roof=True, field_name=f.get('name') or f'Champ {k + 1}', tilt=float(f['tilt']),
+                  azimuth=float(f.get('azimuth') or 0), az_convention='sud0', n_rows=1, width=2.0,
+                  pitch=2.0 / 0.9, height=float(f.get('mount_height') or 0.2),
+                  sub_in_height=1, shading_configs=[dict(sub_in_height=1, share=100.0)])
+        n_inv, n_str = int(f['n_inv']), int(f['n_str'])
+        cc['array'] = dict(n_series=int(f['n_series']), n_strings=n_inv * n_str)
+        cc['inverters']['groups'] = [[n_inv, n_str]]
+        L = cc['losses']
+        for key in ('tr_sn_kva', 'tr_iron_kw', 'tr_cu_kw', 'aux_w', 'aux_thresh_kw', 'aux_night_w'):
+            if L.get(key) not in (None, ''):
+                L[key] = float(L[key]) * share
+        if cc['inverters'].get('p_inj_kw') not in (None, '', 0):
+            cc['inverters']['p_inj_kw'] = float(cc['inverters']['p_inj_kw']) * share
+        fk = dict(files)
+        fk['pan'] = _lib(files, 'pan', f.get('module'))
+        fk['ond'] = _lib(files, 'ond', f.get('inverter'))
+        fk['near'] = near_masks.get(str(f.get('id'))) if f.get('id') is not None else None
+        r = _simulate_one(cc, fk)
+        if not r.get('ok'):
+            r['alerts'] = alerts
+            return r
+        r['_layout'] = roof_layout(f, pan)
+        runs.append((f, r))
+    return _combine_fields(cfg, files, runs, alerts)
+
+
+def _combine_fields(cfg, files, runs, alerts):
+    P = [r['summary']['pnom_kwc'] for _, r in runs]
+    Pt = sum(P)
+    w = [p / Pt for p in P]
+    base = runs[0][1]
+    res = dict(base)
+    res['config'] = cfg
+    res['alerts'] = alerts
+    ws = lambda get: sum(wi * get(r) for wi, (_, r) in zip(w, runs))
+    sm = lambda get: sum(get(r) for _, r in runs)
+    monthly = []
+    for i, m in enumerate(base['monthly']):
+        row = dict(m)
+        for k in ('glob_inc', 'glob_eff', 'rear_inc'):
+            row[k] = ws(lambda r, i=i, k=k: r['monthly'][i][k])
+        for k in ('e_array', 'e_inv', 'e_grid'):
+            row[k] = sm(lambda r, i=i, k=k: r['monthly'][i][k])
+        row['yield_'] = row['e_grid'] * 1000 / Pt
+        den = sm(lambda r, i=i: r['monthly'][i]['glob_inc'] * r['summary']['pnom_kwc'])
+        row['pr'] = row['e_grid'] * 1000 / den if den else 0.0
+        denb = sm(lambda r, i=i: (r['monthly'][i]['e_grid'] * 1000 / r['monthly'][i]['pr_bifi'])
+                  if r['monthly'][i]['pr_bifi'] else 0.0)
+        row['pr_bifi'] = row['e_grid'] * 1000 / denb if denb else 0.0
+        monthly.append(row)
+    res['monthly'] = monthly
+    losses, prev = [], None
+    for i, l in enumerate(base['losses']):
+        row = dict(l)
+        if l['value'] is not None:
+            row['value'] = sm(lambda r, i=i: r['losses'][i]['value']) if l['unit'] == 'MWh' \
+                else ws(lambda r, i=i: r['losses'][i]['value'])
+        if l['pct'] is not None:
+            row['pct'] = ws(lambda r, i=i: r['losses'][i]['pct'])
+            if row['value'] is not None and prev not in (None, 0) and l['stage'] in ('irr', 'dc'):
+                row['pct'] = 100 * (row['value'] / prev - 1)
+        losses.append(row)
+        if row['value'] is not None:
+            prev = row['value']
+    res['losses'] = losses
+    summ = dict(base['summary'])
+    for k, v in base['summary'].items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            summ[k] = ws(lambda r, k=k: r['summary'][k] or 0)
+    for k in ('e_grid_mwh', 'pnom_kwc', 'pac_kva', 'n_modules', 'n_inverters'):
+        summ[k] = sm(lambda r, k=k: r['summary'][k])
+    summ['yield_kwh_kwc'] = summ['e_grid_mwh'] * 1000 / Pt
+    summ['pr'] = monthly[12]['pr']
+    summ['pr_bifi'] = monthly[12]['pr_bifi']
+    summ['dc_ac'] = summ['pnom_kwc'] / summ['pac_kva'] if summ['pac_kva'] else None
+    summ['limit_angle'] = None
+    summ['sub_in_height'] = '–'
+    res['p90'], res['lifetime'] = compute_p90(summ['yield_kwh_kwc'], Pt, cfg, files)
+    summ['p90'], summ['p90_mwh'] = res['p90']['p90'], res['p90']['p90_mwh']
+    res['summary'] = summ
+    res['daily_kwh'] = [sum(r['daily_kwh'][j] for _, r in runs) for j in range(len(base['daily_kwh']))]
+    hr = base['_hourly'].copy()
+    for col in ('GlobInc', 'GlobEff', 'RearEff', 'T_cell', 'V_dc'):
+        hr[col] = sum(wi * r['_hourly'][col] for wi, (_, r) in zip(w, runs)).round(2)
+    for col in ('P_dc_kW', 'P_ac_kW', 'P_grid_kW'):
+        hr[col] = sum(r['_hourly'][col] for _, r in runs).round(2)
+    res['_hourly'] = hr
+    res['faces'] = [fc for _, r in runs for fc in r['faces']]
+    res['shading_configs'] = []
+    res['fields'] = []
+    for k, ((f, r), wi) in enumerate(zip(runs, w)):
+        near_l = next((l['pct'] for l in r['losses'] if l['label'].startswith('Ombrage proche du champ')), None)
+        res['fields'].append(dict(
+            name=f.get('name') or f'Champ {k + 1}', tilt=float(f['tilt']), azimuth=float(f.get('azimuth') or 0),
+            orientation=f.get('orientation') or 'portrait', length=f.get('length'), height=f.get('height'),
+            n_h=r['_layout']['n_h'], n_v=r['_layout']['n_v'], n_modules_layout=r['_layout']['n_modules'],
+            module=r['pan'].get('model'), n_modules=r['summary']['n_modules'], pnom_kwc=r['summary']['pnom_kwc'],
+            n_series=int(f['n_series']), n_inv=int(f['n_inv']), n_str=int(f['n_str']), inverter=r['ond'].get('model'),
+            pac_kva=r['summary']['pac_kva'], weight=wi, yield_kwh_kwc=r['summary']['yield_kwh_kwc'],
+            pr=r['summary']['pr'], e_grid_mwh=r['summary']['e_grid_mwh'], glob_inc=r['summary']['glob_inc'],
+            near_mask=near_l is not None and abs(near_l) > 0 or bool((files.get('near_masks') or {}).get(str(f.get('id')))),
+            near_loss_pct=near_l))
+    return res
+
+
 def check_design(pan, ond, cfg):
     ns = int(cfg['array']['n_series'])
     alerts = []
@@ -519,7 +724,7 @@ DEFAULTS = dict(
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
     meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=False),
     horizon=dict(use=True),
-    structure=dict(type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
+    structure=dict(fields=[], type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
                    shading_configs=[dict(sub_in_height=None, share=100.0)],
                    axis_azimuth=0.0, max_angle=55.0, backtrack=True, axis_height=1.5),
@@ -585,6 +790,7 @@ def _simulate_one(cfg_in, files):
         w, meteo_rows = gsa_correct(w, sp, cz, gsa, cfg['meteo']['gsa_mode'],
                                     bool(cfg['meteo'].get('gsa_align_temp')))
     hz = parse_horizon(files['horizon']) if files.get('horizon') and cfg['horizon'].get('use', True) else None
+    near = parse_horizon(files['near']) if files.get('near') else None
 
     dni_extra = pd.Series(irradiance.get_extra_radiation(t_sun).values, index=w.index)
     am = pd.Series(pvlib.atmosphere.get_relative_airmass(sp['apparent_zenith'].values), index=w.index)
@@ -609,7 +815,7 @@ def _simulate_one(cfg_in, files):
                       azimuth_pvsyst=((o + 90.0 + 180.0) % 360) - 180.0, name='Ouest')]
     else:
         faces = [dict(kind='fixed', share=1.0, tilt=float(st['tilt']), azimuth=to_pvlib(st['azimuth']),
-                      name='Fixe')]
+                      name=st.get('field_name') or 'Fixe')]
     bif = cfg['bifacial']
     bifaciality = float(bif['bifaciality']) if bif.get('bifaciality') not in (None, '') else (
         pan['bifaciality'] if pan['bifaciality'] else 0.0)
@@ -619,7 +825,7 @@ def _simulate_one(cfg_in, files):
     iam_cfg = dict(cfg['iam'])
     iam_cfg['profile'] = pan['iam_profile']
     ctx = dict(w=w, sp=sp, day=day, dni_extra=dni_extra, am=am, structure=st, cfg_struct=st,
-               bifacial=bf, losses=cfg['losses'], horizon=hz, albedo=float(site['albedo']),
+               bifacial=bf, losses=cfg['losses'], horizon=hz, near=near, albedo=float(site['albedo']),
                iam=iam_cfg, sub_in_height=sub_h, elec_effect=float(st['elec_effect']) / 100)
     L = cfg['losses']
     ns, nstr = int(cfg['array']['n_series']), int(cfg['array']['n_strings'])
@@ -663,7 +869,7 @@ def _simulate_one(cfg_in, files):
         p5 = p4 * (1 - L['dc_ohmic'] / 100 * i_rel)
         p_dc += p5
         v_w += v_mod * ns * (1 - L['dc_ohmic'] / 100 * i_rel) * p5
-        for k, s in (('glob_inc0', fi['glob_inc0']), ('glob_inc', fi['glob_inc']),
+        for k, s in (('glob_inc0', fi['glob_inc0']), ('glob_inc', fi['glob_inc']), ('glob_inc_near', fi['glob_inc_near']),
                      ('front_after_shade', fi['front_after_shade']), ('front_soil', fi['front_soil']),
                      ('front_eff', fi['front_eff']), ('rear_inc', fi['rear_inc']),
                      ('rear_eff', fi['rear_eff']), ('g_eff', g_eff)):
@@ -799,7 +1005,12 @@ def _simulate_one(cfg_in, files):
         ('irr', 'Irradiation globale horizontale', None, gh / 1000, 'kWh/m²'),
         ('irr', 'Transposition dans le plan (GlobInc)', gi0 / gh - 1, gi0 / 1000, 'kWh/m²'),
         ('irr', 'Masque lointain (horizon)', S(agg['glob_inc']) / gi0 - 1, S(agg['glob_inc']) / 1000, 'kWh/m²'),
-        ('irr', "Ombrages proches : perte d'irradiance", S(agg['front_after_shade']) / S(agg['glob_inc']) - 1,
+    ]
+    if st.get('roof'):
+        steps.append(('irr', 'Ombrage proche du champ (masque)', S(agg['glob_inc_near']) / S(agg['glob_inc']) - 1,
+                      S(agg['glob_inc_near']) / 1000, 'kWh/m²'))
+    steps += [
+        ('irr', "Ombrages proches : perte d'irradiance", S(agg['front_after_shade']) / S(agg['glob_inc_near']) - 1,
          S(agg['front_after_shade']) / 1000, 'kWh/m²'),
         ('irr', 'Salissure', S(agg['front_soil']) / S(agg['front_after_shade']) - 1, S(agg['front_soil']) / 1000, 'kWh/m²'),
         ('irr', 'IAM sur le global', S(agg['front_eff']) / S(agg['front_soil']) - 1, S(agg['front_eff']) / 1000, 'kWh/m²'),
@@ -925,6 +1136,8 @@ def simulate(cfg_in, files):
     """Une étude de productible par configuration d'ombrage électrique, puis moyenne pondérée
     (part des tables) de toutes les grandeurs : séries horaires, bilans mensuels, pertes, synthèse, P90."""
     cfg = merge(DEFAULTS, cfg_in)
+    if cfg['structure'].get('type') == 'roof':
+        return _simulate_roof(cfg, files)
     pan = parse_pan(files['pan'])
     ond = parse_ond(files['ond'])
     alerts = check_design(pan, ond, cfg)
@@ -1145,6 +1358,25 @@ def export_xlsx(res):
     rows = [[l['annee'], l['p50'], l['p90'], l['e_p50_mwh']] for l in res['lifetime']]
     table(ws, r, ['Année', 'P50 kWh/kWc', 'P90 kWh/kWc', 'P50 MWh'], rows, [None, '0.0', '0.0', '#,##0.0'])
     widths(ws, [56, 18, 18, 14])
+
+    # Champs de toiture
+    if res.get('fields'):
+        ws = wb.create_sheet('Champs')
+        rows = [[f['name'], f['tilt'], f['azimuth'], f['orientation'], f['length'], f['height'],
+                 f"{f['n_h']} × {f['n_v']}", f['n_modules_layout'], f['module'], f['n_modules'], f['pnom_kwc'],
+                 f"{f['n_inv']} × {f['n_str']} chaînes de {f['n_series']}", f['inverter'], f['pac_kva'],
+                 'oui' if f['near_mask'] else 'non', None if f['near_loss_pct'] is None else f['near_loss_pct'] / 100,
+                 f['glob_inc'], f['yield_kwh_kwc'], f['pr'], f['e_grid_mwh']] for f in res['fields']]
+        s = res['summary']
+        rows.append(['Total', None, None, None, None, None, None, sum(f['n_modules_layout'] for f in res['fields']), None,
+                     s['n_modules'], s['pnom_kwc'], None, None, s['pac_kva'], None, None, s['glob_inc'],
+                     s['yield_kwh_kwc'], s['pr'], s['e_grid_mwh']])
+        table(ws, 1, ['Champ', 'Inclinaison °', 'Azimut ° (0 = Sud)', 'Pose', 'Longueur m', 'Hauteur m', 'Calepinage',
+                      'Modules posables', 'Module', 'Modules câblés', 'kWc', 'Câblage', 'Onduleur', 'kVA',
+                      'Masque proche', 'Perte masque proche', 'GlobInc kWh/m²', 'kWh/kWc', 'PR', 'E injectée MWh'], rows,
+              [None, '0.0', '0', None, '0.00', '0.00', None, '0', None, '0', '#,##0.00', None, None, '#,##0.0', None,
+               '+0.00%;-0.00%', '0.0', '0.0', '0.0%', '#,##0.0'])
+        widths(ws, [16, 11, 13, 10, 11, 10, 11, 11, 26, 11, 10, 24, 26, 9, 10, 12, 12, 10, 8, 12])
 
     # Configurations d'ombrage électrique
     if res.get('shading_configs'):

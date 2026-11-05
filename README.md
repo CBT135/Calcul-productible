@@ -10,7 +10,7 @@ Application web d'estimation de productible photovoltaïque au pas horaire, qui 
 2. **Météo** : déposer le TMY PVGIS 5.3 (CSV ou JSON), de préférence **sans horizon** (`usehorizon=0`), le masque étant appliqué par l'application. Déposer ou coller le JSON Global Solar Atlas pour recaler le TMY (mensuel ou annuel).
 3. **Masque lointain** (optionnel) : CSV `Azimut;Hauteur` (0 = Sud, Est négatif) ou fichier horizon PVGIS.
 4. **Modules et onduleurs** : déposer les fichiers `.PAN` et `.OND` (format texte), puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
-5. **Structure** : sheds fixes ou Est-Ouest ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en convention **0 = Sud** (0 = Sud, Est négatif, Ouest positif) :
+5. **Structure** (section placée avant les modules) : sheds fixes, Est-Ouest, tracker mono-axe ou **toiture** ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en convention **0 = Sud** (0 = Sud, Est négatif, Ouest positif) :
    - **sheds** : azimut des modules ;
    - **Est-Ouest** : orientation du faîtage. 0 = Sud, ce qui donne un pan Est à −90° et un pan Ouest à +90°. Une orientation de 20° donne −70° et +110°.
 
@@ -27,6 +27,15 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 | Tension à vide des chaînes à −10 °C | Ns × Voc(−10 °C) ≤ tension max. onduleur (`VAbsMax`) | **Bloquant** |
 | Tension MPP des chaînes à 60 °C | Ns × Vmp(60 °C, 1 000 W/m²) ≥ tension MPPT mini (`VMppMin`) | Alerte |
 | Courant DC | chaînes par onduleur × Isc ≤ courant DC max. (`IMaxDC`) | Alerte |
+
+### Toiture
+
+- **Champs** : un champ par pan de toit (bouton « + Ajouter un toit »). Chaque champ a son inclinaison, son orientation (0 = Sud, Est < 0), sa zone de calepinage (longueur horizontale × hauteur selon la pente), sa pose (portrait ou paysage) et l'espacement entre modules.
+- **Calepinage** : l'application propose le nombre de modules à l'horizontale et à la verticale, et donc la puissance posable, à partir des dimensions du module affecté. Ces nombres peuvent être forcés.
+- **Affectation** : chaque champ reçoit un module et un onduleur, choisis parmi le fichier principal et les fichiers supplémentaires (« + Ajouter un module / un onduleur »), ainsi que son câblage (modules en série, nombre d'onduleurs, chaînes par onduleur). Le nombre de modules câblés est comparé au calepinage : un dépassement bloque la simulation, un manque déclenche une alerte.
+- **Ombrages** : il n'y a pas d'ombrage entre rangées, et tout ce qui est derrière le plan des modules est masqué. Chaque champ peut recevoir son propre masque proche (CSV `Azimut;Hauteur`), qui s'ajoute au masque lointain.
+- **Calcul** : une simulation complète par champ. Les énergies sont additionnées et les grandeurs spécifiques sont moyennées au prorata de la puissance (productible, PR, irradiations, pertes). Le transformateur, les auxiliaires et la limite d'injection sont répartis au prorata de la puissance AC des champs.
+- **Valeurs par défaut au passage en toiture** : effet électrique 100 %, bifacial décoché, Uc = 20 W/m²K, pas de transformateur, ligne HTA à 0 %, pas d'auxiliaires.
 
 ## Méthode de calcul (pas horaire)
 

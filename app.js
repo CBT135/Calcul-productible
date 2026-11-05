@@ -11,7 +11,7 @@ const DEFAULTS = {
   horizon: { use: true },
   structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'sud0', pitch: null, width: null, height: null, n_rows: null,
     n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
-    shading_configs: [{ sub_in_height: null, share: 100 }],
+    shading_configs: [{ sub_in_height: null, share: 100 }], fields: [],
     axis_azimuth: 0, max_angle: 55, backtrack: true, axis_height: 1.5 },
   array: { n_series: null, n_strings: 0 },
   inverters: { groups: [[null, null]], t_offset: 0, p_inj_kw: null },
@@ -56,7 +56,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const nf = (v, d = 0) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pf = (v, d = 1) => (v == null || isNaN(v) ? '–' : nf(100 * v, d) + ' %');
 
-const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, info: {}, check: null, res: null, ready: false, charts: {} };
+const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {} };
 
 // ------------------------------------------------------------------ worker
 const worker = new Worker('worker.js');
@@ -65,7 +65,7 @@ worker.onmessage = (ev) => {
   const d = ev.data;
   if (d.type === 'status') return setStatus(d.text, 'busy', d.pct);
   if (d.type === 'ready') {
-    S.ready = true; $('#engineInfo').textContent = `Moteur v${d.engine} · pvlib ${d.pvlib} · Pyodide`;
+    S.ready = true; parseLib(); $('#engineInfo').textContent = `Moteur v${d.engine} · pvlib ${d.pvlib} · Pyodide`;
     setStatus('Moteur prêt. Déposez les fichiers et lancez la simulation.', 'ok', 100); refreshAll(); return;
   }
   const p = pending.get(d.id); if (!p) return; pending.delete(d.id);
@@ -131,36 +131,43 @@ function buildForm() {
       drop('gsa', '<span>JSON de l\'API GSA (.json ou page .htm enregistrée), ou coller le texte ci-dessous</span>') +
       `<div class="fld full"><textarea id="gsaPaste" placeholder='Coller ici la réponse JSON de https://api.globalsolaratlas.info/data/lta?loc=lat,lon'></textarea></div>
       <div class="fld full" id="gsaTable"></div>`),
-    section('module', 'Modules', drop('pan', '<span>Fichier .PAN (format texte)</span>') +
-      num('array.n_series', 'Modules en série', '', { step: 1, min: 1 }) + num('array.n_strings', 'Nombre de chaînes', '', { ro: true, hint: 'Calculé à partir des groupes d\'onduleurs.' }) +
-      num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
-      `<div class="fld"><label>Puissance DC</label><input type="text" id="pdcOut" readonly></div>`),
-    section('inverter', 'Onduleurs', drop('ond', '<span>Fichier .OND (format texte)</span>') +
-      `<div class="fld full groups"><label>Groupes d'onduleurs<i>nb onduleurs × chaînes par onduleur</i></label><div id="groups"></div>
-      <button type="button" class="mini" id="addGroup">+ Ajouter un groupe</button></div>` +
-      num('inverters.t_offset', 'Offset de température autour des onduleurs', '°C', { step: 0.5, full: true, hint: 'Ajouté à la température ambiante pour le déclassement en puissance (courbe Pmax / Pnom / PLim du .OND).' }) +
-      num('inverters.p_inj_kw', "Limite de puissance d'injection", 'kW', { ph: 'aucune', full: true })),
     section('structure', 'Structure', `<div class="fld full"><label>Type de structure</label><div class="seg" id="stype">
-        <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="tracker" hidden>Tracker mono-axe</button><button type="button" data-v="ew">Est-Ouest</button></div></div>` +
-      num('structure.tilt', 'Inclinaison', '°', { show: 'structure.type!=tracker' }) +
+        <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="ew">Est-Ouest</button><button type="button" data-v="tracker">Tracker mono-axe</button><button type="button" data-v="roof">Toiture</button></div></div>` +
+      `<div class="fld full" data-show="structure.type==roof"><div id="roofFields"></div>
+        <button type="button" class="mini" id="addField">+ Ajouter un toit</button>
+        <div class="hint">Un champ par pan de toiture. Le calepinage propose le nombre de modules posables selon les dimensions de la zone, le module et la pose ; il peut être forcé. Tout ce qui est derrière le plan des modules est considéré comme masqué. Le masque proche d'un champ (obstacles, autres pans) s'ajoute au masque lointain.</div></div>` +
+      num('structure.tilt', 'Inclinaison', '°', { show: 'structure.type!=tracker&&structure.type!=roof' }) +
       num('structure.azimuth', 'Azimut', '°', { show: st('fixed'), hint: '0 = Sud, Est &lt; 0, Ouest &gt; 0.' }) +
       `<div class="fld" data-show="structure.type==ew"><label>Orientation du faîtage<i>°</i></label><input type="number" step="any" data-path="structure.azimuth">
         <div class="hint" id="ewHint">0 = Sud : pan Est à −90°, pan Ouest à +90°.</div></div>` +
       num('structure.axis_azimuth', "Azimut de l'axe", '°', { show: st('tracker'), hint: '0 = axe Nord-Sud (rotation Est-Ouest).' }) +
       num('structure.max_angle', 'Rotation maximale', '±°', { show: st('tracker') }) +
       chk('structure.backtrack', 'Backtracking', { show: st('tracker') }) +
-      num('structure.pitch', 'Entraxe des rangées', 'm', { hint: 'Est-Ouest : distance entre faîtages.' }) +
-      num('structure.width', 'Largeur sensible', 'm', { hint: 'Est-Ouest : largeur d\'un pan.' }) +
-      num('structure.height', 'Hauteur du bord bas', 'm', { show: 'structure.type!=tracker' }) +
+      num('structure.pitch', 'Entraxe des rangées', 'm', { show: 'structure.type!=roof', hint: 'Est-Ouest : distance entre faîtages.' }) +
+      num('structure.width', 'Largeur sensible', 'm', { show: 'structure.type!=roof', hint: 'Est-Ouest : largeur d\'un pan.' }) +
+      num('structure.height', 'Hauteur du bord bas', 'm', { show: 'structure.type!=tracker&&structure.type!=roof' }) +
       num('structure.axis_height', "Hauteur de l'axe", 'm', { show: st('tracker') }) +
-      num('structure.n_rows', 'Nombre de rangées', '', { step: 1, min: 1, hint: 'La 1re rangée n\'est pas ombrée.' }) +
-      num('structure.n_high', 'Modules en hauteur', '', { step: 1, min: 1 }) +
-      sel('structure.orientation', 'Pose des modules', [['portrait', 'Portrait'], ['landscape', 'Paysage']]) +
-      `<div class="fld"><label>GCR / angle limite</label><input type="text" id="gcrOut" readonly></div>`),
+      num('structure.n_rows', 'Nombre de rangées', '', { show: 'structure.type!=roof', step: 1, min: 1, hint: 'La 1re rangée n\'est pas ombrée.' }) +
+      num('structure.n_high', 'Modules en hauteur', '', { show: 'structure.type!=roof', step: 1, min: 1 }) +
+      sel('structure.orientation', 'Pose des modules', [['portrait', 'Portrait'], ['landscape', 'Paysage']], { show: 'structure.type!=roof' }) +
+      `<div class="fld" data-show="structure.type!=roof"><label>GCR / angle limite</label><input type="text" id="gcrOut" readonly></div>`),
     section('shading', 'Ombrage électrique', num('structure.elec_effect', "Fraction de l'effet électrique", '%', { hint: 'Perte électrique des sous-chaînes partiellement ombrées.' }) +
-      `<div class="fld full groups"><label>Configurations de câblage<i>sous-chaînes en hauteur · % des tables</i></label><div id="shconfs"></div>
+      `<div class="fld full groups" data-show="structure.type!=roof"><label>Configurations de câblage<i>sous-chaînes en hauteur · % des tables</i></label><div id="shconfs"></div>
       <button type="button" class="mini" id="addShconf">+ Ajouter une configuration</button>
       <div class="hint">Une étude de productible est calculée par configuration, puis les résultats sont moyennés au prorata des tables. Le total doit faire 100 %. Les chaînes suivent les rangées ; « auto » = 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, 3 par module paysage.</div></div>`),
+    section('module', 'Modules', drop('pan', '<span>Fichier .PAN (format texte)</span>') +
+      num('array.n_series', 'Modules en série', '', { show: 'structure.type!=roof', step: 1, min: 1 }) + num('array.n_strings', 'Nombre de chaînes', '', { show: 'structure.type!=roof', ro: true, hint: 'Calculé à partir des groupes d\'onduleurs.' }) +
+      `<div class="fld full groups" data-show="structure.type==roof"><label>Autres modules<i>affectables aux champs</i></label><div id="lib-pan"></div>
+        <label class="mini filebtn">+ Ajouter un module (.PAN)<input type="file" accept=".pan,.PAN,.htm,.html,.txt" hidden data-lib="pan"></label></div>` +
+      num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
+      `<div class="fld"><label>Puissance DC</label><input type="text" id="pdcOut" readonly></div>`),
+    section('inverter', 'Onduleurs', drop('ond', '<span>Fichier .OND (format texte)</span>') +
+      `<div class="fld full groups" data-show="structure.type==roof"><label>Autres onduleurs<i>affectables aux champs</i></label><div id="lib-ond"></div>
+        <label class="mini filebtn">+ Ajouter un onduleur (.OND)<input type="file" accept=".ond,.OND,.htm,.html,.txt" hidden data-lib="ond"></label></div>` +
+      `<div class="fld full groups" data-show="structure.type!=roof"><label>Groupes d'onduleurs<i>nb onduleurs × chaînes par onduleur</i></label><div id="groups"></div>
+      <button type="button" class="mini" id="addGroup">+ Ajouter un groupe</button></div>` +
+      num('inverters.t_offset', 'Offset de température autour des onduleurs', '°C', { step: 0.5, full: true, hint: 'Ajouté à la température ambiante pour le déclassement en puissance (courbe Pmax / Pnom / PLim du .OND).' }) +
+      num('inverters.p_inj_kw', "Limite de puissance d'injection", 'kW', { ph: 'aucune', full: true })),
     section('bifacial', 'Bifacial', chk('bifacial.enabled', 'Prendre en compte la face arrière') +
       num('bifacial.albedo_ground', 'Albédo du sol', '', { step: 0.01 }) + num('bifacial.rear_shading', 'Ombrage arrière', '%') +
       num('bifacial.rear_mismatch', 'Mismatch arrière', '%') + num('bifacial.transparent', 'Fraction transparente', '%')),
@@ -190,7 +197,17 @@ function buildForm() {
       set(S.cfg, p, v); onChange(p);
     });
   });
-  $$('#stype button').forEach((b) => b.addEventListener('click', () => { set(S.cfg, 'structure.type', b.dataset.v); fillForm(); onChange('structure.type'); }));
+  $$('#stype button').forEach((b) => b.addEventListener('click', () => {
+    const prev = S.cfg.structure.type;
+    set(S.cfg, 'structure.type', b.dataset.v);
+    if (b.dataset.v === 'roof' && prev !== 'roof') applyRoofDefaults();
+    fillForm(); onChange('structure.type');
+  }));
+  $('#addField').addEventListener('click', () => { addField(); });
+  $$('[data-lib]').forEach((inp) => inp.addEventListener('change', async () => {
+    const f = inp.files[0]; if (!f) return; inp.value = '';
+    await addLib(inp.dataset.lib, f);
+  }));
   $$('[data-drop]').forEach(bindDrop);
   $('#addGroup').addEventListener('click', () => { S.cfg.inverters.groups.push([null, null]); renderGroups(); onChange('inverters.groups'); });
   $('#addShconf').addEventListener('click', () => {
@@ -207,18 +224,138 @@ function fillForm() {
     const v = get(S.cfg, el.dataset.path);
     if (el.type === 'checkbox') el.checked = !!v; else el.value = v == null ? '' : v;
   });
-  renderGroups(); renderShconfs(); renderP90Items(); applyVisibility();
+  renderGroups(); renderShconfs(); renderP90Items(); renderLib(); renderRoof(); applyVisibility();
 }
 
 function applyVisibility() {
   $$('[data-show]').forEach((el) => {
-    const m = el.dataset.show.match(/^([\w.]+)(==|!=)(\w+)$/);
-    const v = String(get(S.cfg, m[1]));
-    el.style.display = (m[2] === '==' ? v === m[3] : v !== m[3]) ? '' : 'none';
+    const ok = el.dataset.show.split('&&').every((cond) => {
+      const m = cond.trim().match(/^([\w.]+)(==|!=)(\w+)$/);
+      const v = String(get(S.cfg, m[1]));
+      return m[2] === '==' ? v === m[3] : v !== m[3];
+    });
+    el.style.display = ok ? '' : 'none';
   });
   $$('#stype button').forEach((b) => b.classList.toggle('on', b.dataset.v === S.cfg.structure.type));
 }
 
+// ------------------------------------------------------------------ toiture
+const ROOF_DEFAULTS = [['structure.elec_effect', 100], ['bifacial.enabled', false], ['thermal.uc', 20], ['losses.tr_enabled', false],
+  ['losses.mv_line', 0], ['losses.aux_w', 0], ['losses.aux_night_w', 0]];
+function applyRoofDefaults() {
+  ROOF_DEFAULTS.forEach(([p, v]) => set(S.cfg, p, v));
+  if (!S.cfg.structure.fields.length) S.cfg.structure.fields.push(newField(1));
+  setStatus('Toiture : effet électrique 100 %, bifacial décoché, Uc = 20, sans transformateur, ligne HTA et auxiliaires à zéro (modifiables).', 'ok', 100);
+}
+function newField(n) {
+  return { id: Date.now() + n, name: `Toit ${n}`, tilt: null, azimuth: 0, length: null, height: null, orientation: 'portrait', gap: 0.02,
+    n_h: null, n_v: null, module: 0, n_series: null, inverter: 0, n_inv: 1, n_str: null };
+}
+function addField() {
+  const F = S.cfg.structure.fields, last = F[F.length - 1];
+  const f = newField(F.length + 1);
+  if (last) Object.assign(f, { module: last.module, inverter: last.inverter, orientation: last.orientation, gap: last.gap });
+  F.push(f); renderRoof(); onChange('structure.fields');
+}
+function modInfo(idx) { return idx ? (S.lib.pan[idx - 1] || {}).info : S.info.pan; }
+function ondInfo(idx) { return idx ? (S.lib.ond[idx - 1] || {}).info : S.info.ond; }
+function libOptions(kind, sel) {
+  const main = kind === 'pan' ? S.info.pan : S.info.ond, nm = (i) => (i && !i.error ? `${i.model}${kind === 'pan' ? ` (${nf(i.pnom)} Wc)` : ` (${nf(i.pmax / 1000)} kW)`}` : '');
+  const opts = [[0, S.files[kind] ? nm(main) || S.names[kind] : `${kind === 'pan' ? 'Module' : 'Onduleur'} principal (à déposer)`]]
+    .concat(S.lib[kind].map((x, i) => [i + 1, nm(x.info) || x.name]));
+  return opts.map(([v, l]) => `<option value="${v}" ${Number(sel) === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+}
+function layout(f) {
+  const p = modInfo(f.module); if (!p || p.error) return null;
+  const portrait = (f.orientation || 'portrait') === 'portrait';
+  const mw = portrait ? p.width : p.height, mh = portrait ? p.height : p.width, g = Number(f.gap) || 0;
+  const nh = f.length > 0 ? Math.floor((Number(f.length) + g) / (mw + g) + 1e-9) : 0;
+  const nv = f.height > 0 ? Math.floor((Number(f.height) + g) / (mh + g) + 1e-9) : 0;
+  const n_h = f.n_h > 0 ? Number(f.n_h) : nh, n_v = f.n_v > 0 ? Number(f.n_v) : nv;
+  return { nh, nv, n_h, n_v, n: n_h * n_v, kwc: n_h * n_v * p.pnom / 1000, pnom: p.pnom, uw: n_h * mw + Math.max(n_h - 1, 0) * g, uh: n_v * mh + Math.max(n_v - 1, 0) * g };
+}
+function fieldReadout(f, i) {
+  const L = layout(f), o = ondInfo(f.inverter);
+  const wired = (Number(f.n_series) || 0) * (Number(f.n_inv) || 0) * (Number(f.n_str) || 0);
+  const lay = !L ? 'Calepinage : déposer le module affecté pour le calcul.'
+    : `Calepinage : ${L.n_h} × ${L.n_v} = <b>${nf(L.n)} modules · ${nf(L.kwc, 2)} kWc</b>${(f.n_h > 0 || f.n_v > 0) ? ' (forcé)' : ''} · emprise ${nf(L.uw, 2)} × ${nf(L.uh, 2)} m`
+      + (L.n_h * L.n_v !== L.nh * L.nv ? ` · proposé ${L.nh} × ${L.nv}` : '');
+  const wir = !wired ? 'Câblage : renseigner modules en série, onduleurs et chaînes.'
+    : `Câblage : ${f.n_inv} onduleur(s) × ${f.n_str} chaîne(s) de ${f.n_series} = <b>${nf(wired)} modules${L ? ` · ${nf(wired * L.pnom / 1000, 2)} kWc` : ''}</b>`
+      + (o && !o.error && L ? ` · DC/AC ${nf(wired * L.pnom / (f.n_inv * o.pmax), 2)}` : '')
+      + (L && wired !== L.n ? ` · <span style="color:${wired > L.n ? 'var(--block)' : 'var(--warn)'}">${wired > L.n ? 'dépasse le calepinage' : `${L.n - wired} module(s) non câblé(s)`}</span>` : '');
+  return `${lay}<br>${wir}`;
+}
+function renderRoof() {
+  const box = $('#roofFields'); if (!box) return;
+  const F = S.cfg.structure.fields;
+  const n = (i, k, lab, unit, o = {}) => `<div class="fld"><label>${lab}${unit ? `<i>${unit}</i>` : ''}</label><input type="number" step="${o.step ?? 'any'}" ${o.min != null ? `min="${o.min}"` : ''} value="${F[i][k] ?? ''}" data-f="${i},${k}" ${o.ph ? `placeholder="${o.ph}"` : ''}></div>`;
+  box.innerHTML = F.map((f, i) => {
+    const L = layout(f), nm = S.near[f.id];
+    return `<div class="fieldcard">
+      <div class="fchead"><input type="text" value="${esc(f.name)}" data-f="${i},name" title="Nom du champ"><button type="button" class="mini" data-fdel="${i}" ${F.length < 2 ? 'hidden' : ''} title="Supprimer ce toit">Supprimer</button></div>
+      <div class="grid">
+        ${n(i, 'tilt', 'Inclinaison', '°')}${n(i, 'azimuth', 'Orientation', '° (0 = Sud, Est &lt; 0)')}
+        ${n(i, 'length', 'Longueur de la zone', 'm (horizontale)')}${n(i, 'height', 'Hauteur de la zone', 'm (selon la pente)')}
+        <div class="fld"><label>Pose</label><select data-f="${i},orientation"><option value="portrait" ${f.orientation !== 'landscape' ? 'selected' : ''}>Portrait</option><option value="landscape" ${f.orientation === 'landscape' ? 'selected' : ''}>Paysage</option></select></div>
+        ${n(i, 'gap', 'Espacement entre modules', 'm')}
+        ${n(i, 'n_h', 'Modules à l\'horizontale', '', { step: 1, min: 1, ph: L ? `auto (${L.nh})` : 'auto' })}${n(i, 'n_v', 'Modules à la verticale', '', { step: 1, min: 1, ph: L ? `auto (${L.nv})` : 'auto' })}
+        <div class="fld full"><label>Module</label><select data-f="${i},module">${libOptions('pan', f.module)}</select></div>
+        ${n(i, 'n_series', 'Modules en série', '', { step: 1, min: 1 })}
+        <div class="fld"><label>Onduleur</label><select data-f="${i},inverter">${libOptions('ond', f.inverter)}</select></div>
+        ${n(i, 'n_inv', 'Nombre d\'onduleurs', '', { step: 1, min: 1 })}${n(i, 'n_str', 'Chaînes par onduleur', '', { step: 1, min: 1 })}
+        <div class="fld full"><label>Masque proche du champ<i>optionnel · CSV Azimut;Hauteur</i></label>
+          <div class="nearbox">${nm ? `<span>✓ ${esc(nm.name)}</span><button type="button" class="mini" data-nclr="${i}">Retirer</button>` : '<span class="hint">Aucun masque proche</span>'}
+          <label class="mini filebtn">${nm ? 'Remplacer' : 'Déposer un masque'}<input type="file" accept=".csv,.txt,.hor,.htm,.html" hidden data-near="${i}"></label></div></div>
+        <div class="fld full fro" id="fro-${i}">${fieldReadout(f, i)}</div>
+      </div></div>`;
+  }).join('');
+  $$('#roofFields [data-f]').forEach((el) => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
+    const [i, k] = el.dataset.f.split(','); const f = F[+i];
+    f[k] = el.tagName === 'SELECT' ? (k === 'orientation' ? el.value : Number(el.value)) : el.type === 'number' ? (el.value === '' ? null : Number(el.value)) : el.value;
+    if (el.tagName === 'SELECT') renderRoof(); else { const r = $('#fro-' + i); if (r) r.innerHTML = fieldReadout(f, +i); }
+    onChange('structure.fields');
+  }));
+  $$('#roofFields [data-fdel]').forEach((b) => b.addEventListener('click', () => {
+    const i = +b.dataset.fdel; delete S.near[F[i].id]; F.splice(i, 1); renderRoof(); onChange('structure.fields');
+  }));
+  $$('#roofFields [data-nclr]').forEach((b) => b.addEventListener('click', () => { delete S.near[F[+b.dataset.nclr].id]; renderRoof(); save(); }));
+  $$('#roofFields [data-near]').forEach((inp) => inp.addEventListener('change', async () => {
+    const file = inp.files[0]; if (!file) return; const f = F[+inp.dataset.near];
+    const text = unwrapHtml(await file.text());
+    try { if (S.ready) await call('horizon', { text }); S.near[f.id] = { name: file.name, text }; renderRoof(); save(); }
+    catch (e) { setStatus(`Masque proche « ${file.name} » illisible : ${e.message}`, 'err', 100); }
+  }));
+}
+// bibliothèque de modules / onduleurs supplémentaires (toiture)
+async function addLib(kind, file) {
+  const text = unwrapHtml(await file.text());
+  const item = { name: file.name, text, info: null };
+  try { item.info = await call(kind, { text }); } catch (e) { setStatus(`${file.name} illisible : ${e.message}`, 'err', 100); return; }
+  S.lib[kind].push(item); renderLib(); renderRoof(); save(); onChange('lib');
+}
+function renderLib() {
+  for (const kind of ['pan', 'ond']) {
+    const box = $('#lib-' + kind); if (!box) continue;
+    box.innerHTML = S.lib[kind].map((x, i) => `<div class="grow" style="grid-template-columns:1fr 28px"><span style="color:var(--ink)">${i + 1}. ${esc(x.name)}${x.info && !x.info.error ? ` – ${esc(x.info.model)}` : ''}</span>
+      <button type="button" data-ldel="${kind},${i}" title="Retirer">×</button></div>`).join('') || '<span class="hint">Aucun autre fichier. Le fichier principal ci-dessus est affectable aux champs.</span>';
+  }
+  $$('[data-ldel]').forEach((b) => b.addEventListener('click', () => {
+    const [kind, i] = b.dataset.ldel.split(','); const idx = +i + 1;
+    S.lib[kind].splice(+i, 1);
+    const key = kind === 'pan' ? 'module' : 'inverter';
+    S.cfg.structure.fields.forEach((f) => { if (f[key] === idx) f[key] = 0; else if (f[key] > idx) f[key] -= 1; });
+    renderLib(); renderRoof(); save(); onChange('lib');
+  }));
+}
+async function parseLib() {
+  for (const kind of ['pan', 'ond']) for (const x of S.lib[kind]) if (!x.info && x.text) { try { x.info = await call(kind, { text: x.text }); } catch (e) { x.info = { error: e.message }; } }
+  renderLib(); renderRoof();
+}
+function checkFiles() {
+  const f = { pan: S.files.pan, ond: S.files.ond, pan_extra: S.lib.pan.map((x) => x.text), ond_extra: S.lib.ond.map((x) => x.text) };
+  return f;
+}
 function renderGroups() {
   $('#groups').innerHTML = S.cfg.inverters.groups.map((g, i) => `<div class="grow">
     <input type="number" min="1" step="1" value="${g[0] ?? ''}" data-g="${i},0" title="Nombre d'onduleurs">
@@ -285,8 +422,8 @@ async function parseFile(key) {
   const text = S.files[key]; if (!text) return;
   const el = $('#info-' + key);
   try {
-    if (key === 'pan') S.info.pan = await call('pan', { text });
-    else if (key === 'ond') S.info.ond = await call('ond', { text });
+    if (key === 'pan') { S.info.pan = await call('pan', { text }); renderRoof(); }
+    else if (key === 'ond') { S.info.ond = await call('ond', { text }); renderRoof(); }
     else if (key === 'horizon') S.info.horizon = await call('horizon', { text });
     else if (key === 'pvgis_monthly') S.info.pvgis_monthly = await call('monthly', { text });
     else if (key === 'tmy') {
@@ -420,8 +557,13 @@ function ewFaces(o) {
 }
 function renderDerived() {
   const c = S.cfg, pan = S.info.pan && !S.info.pan.error ? S.info.pan : null;
-  const nmod = c.array.n_series * c.array.n_strings;
-  $('#pdcOut').value = pan ? `${nf(nmod)} modules · ${nf(nmod * pan.pnom / 1000, 1)} kWc` : `${nf(nmod)} modules`;
+  const roof = c.structure.type === 'roof';
+  const rf = roof ? c.structure.fields.map((f) => { const L = layout(f); const n = (Number(f.n_series) || 0) * (Number(f.n_inv) || 0) * (Number(f.n_str) || 0); const o = ondInfo(f.inverter);
+    return { n, kwc: L ? n * L.pnom / 1000 : 0, kva: o && !o.error ? (Number(f.n_inv) || 0) * o.pmax / 1000 : 0, ninv: Number(f.n_inv) || 0 }; }) : [];
+  const rsum = (k) => rf.reduce((a, x) => a + x[k], 0);
+  const nmod = roof ? rsum('n') : c.array.n_series * c.array.n_strings;
+  $('#pdcOut').value = roof ? `${nf(nmod)} modules câblés · ${nf(rsum('kwc'), 2)} kWc (${rf.length} toit${rf.length > 1 ? 's' : ''})`
+    : pan ? `${nf(nmod)} modules · ${nf(nmod * pan.pnom / 1000, 1)} kWc` : `${nf(nmod)} modules`;
   const gcr = c.structure.width / c.structure.pitch;
   let la = '';
   if (c.structure.type !== 'tracker') {
@@ -439,10 +581,10 @@ function renderDerived() {
     meteo: S.files.tmy ? `TMY ✓${c.meteo.tmy_has_horizon ? ' · horizon PVGIS inclus' : ''}` : 'TMY manquant',
     gsa: c.meteo.gsa_mode === 'none' ? 'sans recalage' : (S.gsa ? `${c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'} ✓` : 'données manquantes'),
     horizon: S.files.horizon ? (c.horizon.use ? 'appliqué' : 'désactivé') : 'aucun',
-    module: !(c.array.n_series > 0) ? 'à renseigner' : pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
-    inverter: !(ninv > 0) ? 'à renseigner' : ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
-    structure: { fixed: `Sheds ${c.structure.tilt ?? '–'}° / ${c.structure.azimuth ?? '–'}°`, tracker: `Tracker ±${c.structure.max_angle ?? '–'}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt ?? '–'}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
-    shading: `${c.structure.elec_effect} % · ` + c.structure.shading_configs.map((x) => `${x.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} (${nf(x.share, 2)} %)`).join(' + '),
+    module: roof ? (nmod ? `${nf(rsum('kwc'), 2)} kWc · ${nf(nmod)} modules` : 'à renseigner') : !(c.array.n_series > 0) ? 'à renseigner' : pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
+    inverter: roof ? (rsum('ninv') ? `${rsum('ninv')} onduleur(s) · ${nf(rsum('kva'), 1)} kVA` : 'à renseigner') : !(ninv > 0) ? 'à renseigner' : ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
+    structure: roof ? `Toiture · ${c.structure.fields.length} toit(s) : ` + c.structure.fields.map((f) => `${f.tilt ?? '–'}°/${f.azimuth ?? 0}°`).join(', ') : { fixed: `Sheds ${c.structure.tilt ?? '–'}° / ${c.structure.azimuth ?? '–'}°`, tracker: `Tracker ±${c.structure.max_angle ?? '–'}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt ?? '–'}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
+    shading: roof ? `${c.structure.elec_effect} %` : `${c.structure.elec_effect} % · ` + c.structure.shading_configs.map((x) => `${x.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} (${nf(x.share, 2)} %)`).join(' + '),
     bifacial: c.bifacial.enabled ? `albédo ${c.bifacial.albedo_ground}` : 'non',
     thermal: `Uc ${c.thermal.uc} · ${c.iam.mode === 'pan' ? 'IAM .PAN' : 'Fresnel'}`,
     dc: `${nf(c.losses.soiling, 1)} + ${nf(c.losses.lid, 1)} + ${nf(c.losses.mismatch, 1)} + ${nf(c.losses.dc_ohmic, 1)} %`,
@@ -453,24 +595,33 @@ function renderDerived() {
 }
 
 async function runCheck() {
-  if (!(S.cfg.array.n_series > 0) || missingFields().includes("Groupes d'onduleurs")) { S.check = null; renderAlerts(); return; }
+  const roof = S.cfg.structure.type === 'roof';
+  if (roof ? missingFields().some((m) => m.startsWith('Toit') || m.startsWith('Champ') || m === 'Au moins un toit')
+    : (!(S.cfg.array.n_series > 0) || missingFields().includes("Groupes d'onduleurs"))) { S.check = null; renderAlerts(); return; }
   if (!S.ready || !S.files.pan || !S.files.ond || (S.info.pan && S.info.pan.error) || (S.info.ond && S.info.ond.error)) { S.check = null; renderAlerts(); return; }
-  try { S.check = await call('check', { pan: S.files.pan, ond: S.files.ond, cfg: S.cfg }); } catch (e) { S.check = { error: e.message }; }
+  try { S.check = await call('check', { files: checkFiles(), cfg: S.cfg }); } catch (e) { S.check = { error: e.message }; }
   renderAlerts(); renderDerived();
 }
 const REQUIRED = [
   ['site.lat', 'Latitude'], ['site.lon', 'Longitude'], ['site.alt', 'Altitude'],
-  ['structure.tilt', 'Inclinaison', (c) => c.structure.type !== 'tracker'], ['structure.pitch', 'Entraxe des rangées'],
-  ['structure.width', 'Largeur sensible'], ['structure.height', 'Hauteur du bord bas', (c) => c.structure.type !== 'tracker'],
+  ['structure.tilt', 'Inclinaison', (c) => c.structure.type !== 'tracker' && c.structure.type !== 'roof'], ['structure.pitch', 'Entraxe des rangées', (c) => c.structure.type !== 'roof'],
+  ['structure.width', 'Largeur sensible', (c) => c.structure.type !== 'roof'], ['structure.height', 'Hauteur du bord bas', (c) => c.structure.type !== 'tracker' && c.structure.type !== 'roof'],
   ['structure.axis_height', "Hauteur de l'axe", (c) => c.structure.type === 'tracker'],
-  ['structure.n_rows', 'Nombre de rangées'], ['structure.n_high', 'Modules en hauteur'], ['array.n_series', 'Modules en série'],
+  ['structure.n_rows', 'Nombre de rangées', (c) => c.structure.type !== 'roof'], ['structure.n_high', 'Modules en hauteur', (c) => c.structure.type !== 'roof'], ['array.n_series', 'Modules en série', (c) => c.structure.type !== 'roof'],
   ['losses.tr_sn_kva', 'Puissance transfo', (c) => c.losses.tr_enabled], ['losses.tr_iron_kw', 'Pertes fer', (c) => c.losses.tr_enabled],
   ['losses.tr_cu_kw', 'Pertes cuivre nominales', (c) => c.losses.tr_enabled],
 ];
 function missingFields() {
   const c = S.cfg;
   const out = REQUIRED.filter(([p, , cond]) => (!cond || cond(c)) && (get(c, p) == null || get(c, p) === '' || Number.isNaN(get(c, p)))).map(([, l]) => l);
-  if (!c.inverters.groups.length || c.inverters.groups.some((g) => !(g[0] > 0) || !(g[1] > 0))) out.push("Groupes d'onduleurs");
+  if (c.structure.type === 'roof') {
+    if (!c.structure.fields.length) out.push('Au moins un toit');
+    const lab = { tilt: 'inclinaison', length: 'longueur', height: 'hauteur', n_series: 'modules en série', n_inv: 'onduleurs', n_str: 'chaînes par onduleur' };
+    c.structure.fields.forEach((f, i) => {
+      const m = Object.keys(lab).filter((k) => f[k] == null || f[k] === '' || Number.isNaN(f[k]) || (k !== 'tilt' && !(f[k] > 0)));
+      if (m.length) out.push(`${f.name || 'Champ ' + (i + 1)} (${m.map((k) => lab[k]).join(', ')})`);
+    });
+  } else if (!c.inverters.groups.length || c.inverters.groups.some((g) => !(g[0] > 0) || !(g[1] > 0))) out.push("Groupes d'onduleurs");
   return out;
 }
 function localAlerts() {
@@ -521,6 +672,10 @@ $('#btnRun').addEventListener('click', async () => {
   const files = { tmy: S.files.tmy, tmy_name: S.names.tmy, pan: S.files.pan, ond: S.files.ond };
   if (S.files.horizon) files.horizon = S.files.horizon;
   if (S.files.pvgis_monthly) files.pvgis_monthly = S.files.pvgis_monthly;
+  if (S.cfg.structure.type === 'roof') {
+    Object.assign(files, { pan_extra: S.lib.pan.map((x) => x.text), ond_extra: S.lib.ond.map((x) => x.text), near_masks: {} });
+    S.cfg.structure.fields.forEach((f) => { if (S.near[f.id]) files.near_masks[String(f.id)] = S.near[f.id].text; });
+  }
   if (S.gsa) files.gsa = S.gsa;
   const cfg = clone(S.cfg);
   if (!S.gsa) cfg.meteo.gsa_mode = 'none';
@@ -547,10 +702,17 @@ function renderResults() {
   // tableau mensuel
   const rows = r.monthly.map((m, i) => `<tr class="${i === 12 ? 'tot' : ''}"><td>${m.mois}</td><td>${nf(m.ghi, 1)}</td><td>${nf(m.dhi, 1)}</td><td>${nf(m.t_amb, 1)}</td><td>${nf(m.glob_inc, 1)}</td><td>${nf(m.glob_eff, 1)}</td><td>${nf(m.rear_inc, 1)}</td><td>${nf(m.e_array, 1)}</td><td>${nf(m.e_grid, 1)}</td><td>${nf(m.yield_, 1)}</td><td>${pf(m.pr, 1)}</td><td>${pf(m.pr_bifi, 1)}</td></tr>`).join('');
   $('#tblMonthly').innerHTML = `<table class="res"><tr><th>Mois</th><th>GHI<br>kWh/m²</th><th>DIF<br>kWh/m²</th><th>T amb<br>°C</th><th>GlobInc<br>kWh/m²</th><th>GlobEff<br>kWh/m²</th><th>Arrière<br>kWh/m²</th><th>E champ<br>MWh</th><th>E injectée<br>MWh</th><th>Productible<br>kWh/kWc</th><th>PR</th><th>PR bifacial</th></tr>${rows}</table>`;
-  $('#shResults').innerHTML = shConfTable(r);
+  $('#shResults').innerHTML = r.fields ? '' : shConfTable(r);
+  $('#fieldsResults').innerHTML = fieldsTable(r);
   drawCharts(); renderLosses(); renderMeteo(); renderP90(); renderHyp();
 }
 
+function fieldsTable(r) {
+  const F = r.fields || []; if (!F.length) return '';
+  return `<h3>Champs de toiture</h3><div class="tblwrap"><table class="res"><tr><th>Champ</th><th>Incl. / orient.</th><th>Calepinage</th><th>Module</th><th>kWc</th><th>Onduleurs</th><th>Masque proche</th><th>GlobInc<br>kWh/m²</th><th>Productible<br>kWh/kWc</th><th>PR</th><th>MWh</th></tr>` +
+    F.map((f) => `<tr><td>${esc(f.name)}</td><td>${nf(f.tilt, 0)}° / ${nf(f.azimuth, 0)}°</td><td>${f.n_h} × ${f.n_v} (${f.n_modules} câblés)</td><td>${esc(f.module)}</td><td>${nf(f.pnom_kwc, 2)}</td><td>${f.n_inv} × ${esc(f.inverter)}</td><td>${f.near_mask ? nf(f.near_loss_pct, 2) + ' %' : '–'}</td><td>${nf(f.glob_inc, 1)}</td><td>${nf(f.yield_kwh_kwc, 1)}</td><td>${pf(f.pr, 1)}</td><td>${nf(f.e_grid_mwh, 2)}</td></tr>`).join('') +
+    `<tr class="tot"><td>Total / moyenne pondérée</td><td></td><td>${nf(r.summary.n_modules)} modules</td><td></td><td>${nf(r.summary.pnom_kwc, 2)}</td><td>${nf(r.summary.n_inverters)}</td><td></td><td>${nf(r.summary.glob_inc, 1)}</td><td>${nf(r.summary.yield_kwh_kwc, 1)}</td><td>${pf(r.summary.pr, 1)}</td><td>${nf(r.summary.e_grid_mwh, 2)}</td></tr></table></div>`;
+}
 function shConfTable(r) {
   const L2 = r.shading_configs || []; if (!L2.length) return '';
   return `<h3>Configurations d'ombrage électrique</h3><div class="tblwrap"><table class="res"><tr><th>Configuration</th><th>Sous-chaînes en hauteur</th><th>Part des tables</th><th>Perte ombrage électrique</th><th>Productible kWh/kWc</th><th>PR</th><th>Contribution MWh</th></tr>` +
@@ -635,16 +797,16 @@ function renderHyp() {
     ['Vmp / Imp / Voc / Isc', `${nf(pan.vmp, 2)} V / ${nf(pan.imp, 2)} A / ${nf(pan.voc, 2)} V / ${nf(pan.isc, 2)} A`],
     ['Modèle une diode', `Rs ${nf(pan.rs, 3)} Ω · Rsh ${nf(pan.rsh)} Ω · Rsh(0) ${nf(pan.rsh0)} Ω · γ ${nf(pan.gamma, 3)} · μγ ${pan.mu_gamma}`],
     ['Coefficients T°', `μIsc ${nf(pan.mu_isc * 1000, 2)} mA/°C · μVoc ${nf(pan.mu_voc, 1)} mV/°C`],
-    ['Champ', `${nf(s.n_modules)} modules · ${c.array.n_series} en série × ${c.array.n_strings} chaînes · ${nf(s.pnom_kwc, 1)} kWc`],
+    ['Champ', r.fields ? `${nf(s.n_modules)} modules sur ${r.fields.length} toit(s) · ${nf(s.pnom_kwc, 2)} kWc (détail par champ dans la synthèse)` : `${nf(s.n_modules)} modules · ${c.array.n_series} en série × ${c.array.n_strings} chaînes · ${nf(s.pnom_kwc, 1)} kWc`],
     ['Bifacialité retenue', s.bifaciality ? nf(s.bifaciality, 2) : 'non'],
     ['Onduleur', `${esc(ond.manufacturer)} ${esc(ond.model)}`],
     ['Puissance onduleur', `Pnom ${nf(ond.pnom / 1000)} kW à ${nf(ond.t_pnom)} °C · Pmax ${nf(ond.pmax / 1000)} kW à ${nf(ond.t_pmax)} °C · offset ${nf(c.inverters.t_offset, 1)} °C`],
-    ['Groupes', c.inverters.groups.map(([a, b]) => `${a} × ${b} chaînes`).join(' + ') + ` · DC/AC ${nf(s.dc_ac, 2)}`],
+    ['Groupes', r.fields ? r.fields.map((f) => `${esc(f.name)} : ${f.n_inv} × ${f.n_str} chaînes de ${f.n_series}`).join(' · ') + ` · DC/AC ${nf(s.dc_ac, 2)}` : c.inverters.groups.map(([a, b]) => `${a} × ${b} chaînes`).join(' + ') + ` · DC/AC ${nf(s.dc_ac, 2)}`],
     ['Plage MPPT / Vmax / Imax DC', `${nf(ond.vmin)}–${nf(ond.vmax)} V · ${nf(ond.vabsmax)} V · ${nf(ond.imax_dc)} A`],
     ['Tension MPP moyenne', `${nf(s.vmpp_mean)} V`]])}</div><div>${kv([
-    ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}°, ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°, faîtage ${c.structure.azimuth}° : ${ewFaces(c.structure.azimuth)}` }[c.structure.type]],
-    ['Géométrie', `entraxe ${c.structure.pitch} m · largeur ${c.structure.width} m · GCR ${pf(s.gcr, 1)}${s.limit_angle != null ? ` · angle limite ${nf(s.limit_angle, 1)}°` : ''} · ${c.structure.n_rows} rangées`],
-    ['Ombrage électrique', `${c.structure.elec_effect} % · ` + (r.shading_configs || []).map((x) => `${x.sub_in_height} sous-chaînes en hauteur sur ${nf(x.share, 2)} % des tables`).join(' + ')],
+    ['Structure', r.fields ? 'Toiture : ' + r.fields.map((f) => `${esc(f.name)} ${nf(f.tilt, 0)}° / ${nf(f.azimuth, 0)}°, zone ${nf(f.length, 2)} × ${nf(f.height, 2)} m, ${f.orientation === 'landscape' ? 'paysage' : 'portrait'} ${f.n_h} × ${f.n_v}`).join(' · ') : { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}°, ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°, faîtage ${c.structure.azimuth}° : ${ewFaces(c.structure.azimuth)}` }[c.structure.type]],
+    ['Géométrie', r.fields ? 'plan unique par champ, sans ombrage entre rangées ; tout ce qui est derrière le plan des modules est masqué' : `entraxe ${c.structure.pitch} m · largeur ${c.structure.width} m · GCR ${pf(s.gcr, 1)}${s.limit_angle != null ? ` · angle limite ${nf(s.limit_angle, 1)}°` : ''} · ${c.structure.n_rows} rangées`],
+    ['Ombrage électrique', r.fields ? `${c.structure.elec_effect} %` : `${c.structure.elec_effect} % · ` + (r.shading_configs || []).map((x) => `${x.sub_in_height} sous-chaînes en hauteur sur ${nf(x.share, 2)} % des tables`).join(' + ')],
     ['Ombrage proche du diffus', r.faces.map((f) => `${f.name} ${pf(f.diffuse_attenuation, 1)}`).join(', ')],
     ['Bifacial', c.bifacial.enabled ? `albédo sol ${c.bifacial.albedo_ground} · ombrage arrière ${c.bifacial.rear_shading} % · mismatch ${c.bifacial.rear_mismatch} %` : 'non'],
     ['Thermique', `Uc ${c.thermal.uc} · Uv ${c.thermal.uv}`], ['IAM', c.iam.mode === 'pan' ? 'profil du .PAN' : `Fresnel n=${c.iam.n}, n(AR)=${c.iam.n_ar ?? '–'}`],
@@ -666,7 +828,8 @@ $('#expCsv').addEventListener('click', async () => { const t = await call('csv')
 $('#expJson').addEventListener('click', saveProject);
 $('#btnSave').addEventListener('click', saveProject);
 function saveProject() {
-  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa };
+  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa,
+    lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near };
   download(baseName() + '.json', new Blob([JSON.stringify(data)], { type: 'application/json' }));
 }
 $('#openProject').addEventListener('change', async (e) => {
@@ -678,6 +841,7 @@ function loadProject(d) {
   if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
   resetView();
   S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null; S.check = null;
+  S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; if (S.ready) parseLib();
   fillForm(); syncStrings(); save(); refreshAll();
   setStatus(`Projet « ${S.cfg.project.name} – ${S.cfg.project.variant} » ouvert.` + (d.note ? ' ' + d.note : ''), 'ok', 100);
 }
@@ -685,7 +849,7 @@ function loadProject(d) {
 function resetView() {
   $('#results').hidden = true;
   Object.values(S.charts).forEach((c) => c.destroy()); S.charts = {};
-  ['#tiles', '#tblMonthly', '#shResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
+  ['#tiles', '#tblMonthly', '#shResults', '#fieldsResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
   $$('#form input[type=file]').forEach((i) => (i.value = ''));
   const gp = $('#gsaPaste'); if (gp) gp.value = '';
   $$('#form .hint[id^="info-"]').forEach((e) => { e.textContent = ''; e.style.color = ''; });
@@ -695,7 +859,7 @@ function resetView() {
 $('#btnNew').addEventListener('click', () => {
   if (!confirm('Repartir d\'un projet vierge ? Les saisies et fichiers actuels seront effacés.')) return;
   resetView();
-  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.info = {}; S.res = null; S.check = null;
+  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
   fillForm(); syncStrings(); save(); refreshAll();
   $$('details.sec').forEach((d) => (d.open = d.id === 'sec-project' || d.id === 'sec-site'));
   setStatus('Nouveau projet : renseigner le site, déposer les fichiers puis lancer la simulation.', 'ok', 100);
@@ -716,8 +880,8 @@ $('#expPdf').addEventListener('click', () => {
   const html = `<h1>${esc(c.project.name)} – ${esc(c.project.variant)}</h1>
     <div class="sub">Rapport de simulation de productible · ${new Date().toLocaleDateString('fr-FR')}${c.project.author ? ' · ' + esc(c.project.author) : ''} · moteur v${r.engine}, pvlib ${r.pvlib}</div>
     <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50)</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
-    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
-    <div>${kv([['Modules', `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
+    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
+    <div>${kv([['Modules', r.fields ? [...new Set(r.fields.map((f) => f.module))].map(esc).join(', ') + ` · ${nf(s.n_modules)} modules` : `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', r.fields ? `${s.n_inverters} : ` + [...new Set(r.fields.map((f) => f.inverter))].map(esc).join(', ') : `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
     <h2>Vérifications de dimensionnement</h2><table><tr><th>Vérification</th><th>Statut</th><th>Détail</th></tr>${r.alerts.map((a) => `<tr><td>${esc(a.title)}</td><td>${{ ok: 'OK', warn: 'Alerte', block: 'Bloquant' }[a.level]}</td><td>${esc(a.message)}</td></tr>`).join('')}</table>
     <h2>Résultats mensuels</h2>${img('chMonthly')}
     <table><tr><th>Mois</th><th>GHI</th><th>DIF</th><th>T amb</th><th>GlobInc</th><th>GlobEff</th><th>Arrière</th><th>E champ MWh</th><th>E injectée MWh</th><th>kWh/kWc</th><th>PR</th></tr>${r.monthly.map((m, i) => `<tr class="${i === 12 ? 'tot' : ''}"><td>${m.mois}</td><td>${nf(m.ghi, 1)}</td><td>${nf(m.dhi, 1)}</td><td>${nf(m.t_amb, 1)}</td><td>${nf(m.glob_inc, 1)}</td><td>${nf(m.glob_eff, 1)}</td><td>${nf(m.rear_inc, 1)}</td><td>${nf(m.e_array, 1)}</td><td>${nf(m.e_grid, 1)}</td><td>${nf(m.yield_, 1)}</td><td>${pf(m.pr, 1)}</td></tr>`).join('')}</table>
@@ -726,6 +890,7 @@ $('#expPdf').addEventListener('click', () => {
     <div><table><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}</table></div></div>
     ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
+    ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
     ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
     <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
     <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle à une diode, courbes de rendement onduleur). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
@@ -748,9 +913,9 @@ function migrate(raw) {
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;
 }
-function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
+function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; } } catch (e) { /* ignore */ }
+  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; } } catch (e) { /* ignore */ }
 }
 
 load(); buildForm(); fillForm(); syncStrings(); initMap(); refreshAll();

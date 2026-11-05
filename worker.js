@@ -24,10 +24,10 @@ warnings.filterwarnings('ignore')
 sys.path.insert(0, '/home/pyodide')
 import productible as P
 _last = None
-def _check(pan, ond, cfg_json):
-    cfg = P.merge(P.DEFAULTS, json.loads(cfg_json))
-    p = P.parse_pan(pan); o = P.parse_ond(ond)
-    return json.dumps(dict(alerts=P.check_design(p, o, cfg), pan=P._public(p), ond=P._public(o),
+def _check(files_json, cfg_json):
+    cfg = P.merge(P.DEFAULTS, json.loads(cfg_json)); files = json.loads(files_json)
+    p = P.parse_pan(files['pan']); o = P.parse_ond(files['ond'])
+    return json.dumps(dict(alerts=P.check_project(cfg, files), pan=P._public(p), ond=P._public(o),
                            sub_in_height=P.default_sub_in_height(cfg['structure'], p)), default=float)
 def _pan(pan):
     return json.dumps(P._public(P.parse_pan(pan)), default=float)
@@ -64,7 +64,7 @@ self.onmessage = async (ev) => {
     let out;
     const call = (fn, ...a) => py.globals.get(fn)(...a);
     if (cmd === 'init') out = null;
-    else if (cmd === 'check') out = JSON.parse(call('_check', args.pan, args.ond, JSON.stringify(args.cfg)));
+    else if (cmd === 'check') out = JSON.parse(call('_check', JSON.stringify(args.files), JSON.stringify(args.cfg)));
     else if (cmd === 'pan') out = JSON.parse(call('_pan', args.text));
     else if (cmd === 'ond') out = JSON.parse(call('_ond', args.text));
     else if (cmd === 'horizon') out = JSON.parse(call('_horizon', args.text));
