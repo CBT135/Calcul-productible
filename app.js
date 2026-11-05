@@ -1079,7 +1079,7 @@ $('#expPdf').addEventListener('click', async () => {
   setStatus('Rapport prêt : boîte de dialogue d\'impression.', 'ok', 100);
   const aerialSite = siteImg ? `<figure class="aerial"><img src="${siteImg}"><figcaption>Vue aérienne du site (${nf(c.site.lat, 5)} °N / ${nf(c.site.lon, 5)} °E)</figcaption></figure>`
     : '<p class="cap">Vue aérienne indisponible (hors couverture IGN ou réseau).</p>';
-  const aerialRoofs = !r.fields ? '' : roofImg ? `<h2>Implantation des toits</h2><figure class="aerial"><img src="${roofImg}"></figure>${roofsLegend(r, c)}`
+  const aerialRoofs = !r.fields ? '' : roofImg ? `<div class="keep"><h2>Implantation des toits</h2><figure class="aerial roofs"><img src="${roofImg}"></figure>${roofsLegend(r, c)}</div>`
     : `<h2>Implantation des toits</h2><p class="cap">Aucun toit relevé sur la vue aérienne (bouton « Vue aérienne » de chaque toit).</p>${roofsLegend(r, c)}`;
   const img = (id) => { const ch = S.charts[id]; return ch ? `<img src="${ch.toBase64Image('image/png', 1)}">` : ''; };
   // forcer le rendu des graphiques cachés
@@ -1099,9 +1099,9 @@ $('#expPdf').addEventListener('click', async () => {
     <div><table><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}</table></div></div>
     ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
-    ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') + aerialRoofs : ''}
+    ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '').replace('<table class="res">', '<table class="res wide">') + aerialRoofs : ''}
     ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
-    <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
+    <h2 class="pb">Hypothèses détaillées</h2><div class="hyp">${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="stack"')}</div>
     <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle à une diode, courbes de rendement onduleur). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
   $('#report').innerHTML = html;
   $$('.tab').forEach((t) => t.classList.toggle('on', t.id === 'tab-' + $('#tabs button.on').dataset.tab));

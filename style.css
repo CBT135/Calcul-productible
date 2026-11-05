@@ -158,6 +158,15 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
   #report .kpis div{flex:1;border:1px solid #ccc;border-radius:2mm;padding:2.5mm}
   #report .kpis b{display:block;font-size:14pt}
   #report .cols{display:flex;gap:6mm} #report .cols>div{flex:1}
+  #report td,#report th{white-space:normal!important;overflow-wrap:anywhere}
+  #report table.wide{font-size:7.6pt}
+  #report table.wide th,#report table.wide td{padding:1.1mm 1.2mm}
+  #report .hyp .stack>div{margin-bottom:3mm}
+  #report .hyp table.kv td{text-align:left;vertical-align:top}
+  #report .hyp table.kv td:first-child{width:32%;color:#5d6b7a;font-weight:500}
+  #report .keep{page-break-inside:avoid;break-inside:avoid}
+  #report figure.aerial.roofs img{max-height:120mm;object-fit:contain}
+  #report table.legend td{text-align:left}
   #report figure.aerial{margin:4mm 0 2mm;page-break-inside:avoid}
   #report figure.aerial img{width:100%;border-radius:2mm}
   #report figcaption,#report .cap{color:#5d6b7a;font-size:8.5pt;margin-top:1mm}
