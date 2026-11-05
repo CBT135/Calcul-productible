@@ -11,7 +11,7 @@ Application web d'estimation de productible photovoltaïque, de type PVsyst, qui
 3. **Masque lointain** (optionnel) : CSV PVsyst (`Azimut;Hauteur`, 0 = Sud, Est négatif) ou fichier horizon PVGIS.
 4. **Modules et onduleurs** : déposer les fichiers PVsyst `.PAN` et `.OND`, puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
 5. **Structure** : sheds fixes, tracker mono-axe (avec ou sans backtracking) ou Est-Ouest ; ombrage électrique « selon les chaînes ».
-6. **Pertes, bifacial, thermique, P50/P90** : valeurs par défaut issues d'un cas de référence PVsyst, toutes modifiables.
+6. **Pertes, bifacial, thermique, P50/P90** : valeurs standard proposées, toutes modifiables. Un nouveau projet part de champs vides pour tout ce qui est propre au site (coordonnées, géométrie, câblage, transformateur) ; la simulation reste bloquée tant qu'ils ne sont pas renseignés.
 7. **Lancer la simulation**, puis exporter : classeur Excel complet, rapport PDF, série horaire CSV, projet JSON (rouvrable avec toutes les saisies et tous les fichiers).
 
 Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
@@ -64,7 +64,7 @@ Dépendances : `pvlib>=0.13`, `numpy`, `pandas`, `scipy`, `openpyxl`.
 
 ## Projet test
 
-`exemples/St-Seurin_Var0.json` (bouton **Exemple**) : centrale au sol de 2 229 kWc en sheds fixes 16° plein sud, bifaciale. Il contient le TMY PVGIS 5.3 sans horizon, l'horizon PVGIS, les données mensuelles PVGIS et les valeurs Global Solar Atlas. L'ombrage électrique y est réparti en deux configurations : 6 sous-chaînes en hauteur sur 86,72 % des tables, 1 sous-chaîne sur 13,28 %. Les fichiers .PAN (JKM645N-66HL4M-BDV) et .OND (SUN2000-330KTL-H1) ne sont pas publiés : il faut les déposer. S'ils sont déjà chargés dans l'application, ils sont conservés.
+`exemples/St-Seurin_Var0.json` est un projet de test, à ouvrir avec le bouton **Ouvrir** après l'avoir téléchargé. Il s'agit d'une centrale au sol de 2 229 kWc en sheds fixes 16° plein sud, bifaciale. L'ombrage électrique y est réparti en deux configurations : 6 sous-chaînes en hauteur sur 86,72 % des tables, 1 sous-chaîne sur 13,28 %. Le fichier contient le TMY PVGIS sans horizon, l'horizon PVGIS, les données mensuelles PVGIS et les valeurs Global Solar Atlas. Les fichiers .PAN et .OND ne sont pas publiés : il faut les déposer.
 
 ## Licence et crédits
 

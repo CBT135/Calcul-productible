@@ -1,24 +1,26 @@
 /* Calcul productible PV – interface (saisie, fichiers, résultats, exports). Le calcul tourne dans worker.js (Pyodide). */
 'use strict';
 
-// ------------------------------------------------------------------ valeurs par défaut (cas St-Seurin)
+// ------------------------------------------------------------------ projet vierge
+// Les champs propres au projet sont vides ; seules les hypothèses génériques (pertes, thermique, IAM,
+// incertitudes P90…) gardent une valeur standard, modifiable.
 const DEFAULTS = {
-  project: { name: 'Nouveau projet', variant: 'Var0', author: '' },
-  site: { lat: 45.0034, lon: 0.0174, alt: 34, albedo: 0.20 },
+  project: { name: '', variant: 'Var0', author: '' },
+  site: { lat: null, lon: null, alt: null, albedo: 0.20 },
   meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: false },
   horizon: { use: true },
-  structure: { type: 'fixed', tilt: 16, azimuth: 180, pitch: 9.01, width: 7.19, height: 0.80, n_rows: 17,
-    n_high: 3, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
+  structure: { type: 'fixed', tilt: null, azimuth: 180, pitch: null, width: null, height: null, n_rows: null,
+    n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
     shading_configs: [{ sub_in_height: null, share: 100 }],
     axis_azimuth: 180, max_angle: 55, backtrack: true, axis_height: 1.5 },
-  array: { n_series: 27, n_strings: 128 },
-  inverters: { groups: [[4, 21], [2, 22]], t_offset: 0, p_inj_kw: null },
+  array: { n_series: null, n_strings: 0 },
+  inverters: { groups: [[null, null]], t_offset: 0, p_inj_kw: null },
   bifacial: { enabled: true, bifaciality: null, albedo_ground: 0.17, rear_shading: 5, rear_mismatch: 10, transparent: 0 },
   thermal: { uc: 29, uv: 0 },
   iam: { mode: 'fresnel', n: 1.526, n_ar: 1.29 },
   losses: { soiling: 1.5, lid: 1.0, quality: 0, mismatch: 1.0, string_mismatch: 0.1, dc_ohmic: 1.0,
-    ac_ohmic: 1.5, mv_line: 0.1, availability: 0, tr_enabled: true, tr_sn_kva: 2210, tr_iron_kw: 1.32,
-    tr_cu_kw: 13.24, tr_always_on: true, aux_w: 500, aux_thresh_kw: 500, aux_night_w: 0, inv_night: false },
+    ac_ohmic: 1.5, mv_line: 0.1, availability: 0, tr_enabled: true, tr_sn_kva: null, tr_iron_kw: null,
+    tr_cu_kw: null, tr_always_on: true, aux_w: 500, aux_thresh_kw: 500, aux_night_w: 0, inv_night: false },
   p90: { meteo_var: 3.0, items: [
     ['Variabilité météo future sur 10 ans', 2.0],
     ['Modélisation (pertes DC, AC, ombrages, T°, disponibilité)', 2.5],
@@ -182,7 +184,7 @@ function buildForm() {
   });
   $$('#stype button').forEach((b) => b.addEventListener('click', () => { set(S.cfg, 'structure.type', b.dataset.v); onChange('structure.type'); }));
   $$('[data-drop]').forEach(bindDrop);
-  $('#addGroup').addEventListener('click', () => { S.cfg.inverters.groups.push([1, 10]); renderGroups(); onChange('inverters.groups'); });
+  $('#addGroup').addEventListener('click', () => { S.cfg.inverters.groups.push([null, null]); renderGroups(); onChange('inverters.groups'); });
   $('#addShconf').addEventListener('click', () => {
     const used = S.cfg.structure.shading_configs.reduce((a, c) => a + (Number(c.share) || 0), 0);
     S.cfg.structure.shading_configs.push({ sub_in_height: 1, share: Math.max(0, +(100 - used).toFixed(2)) });
@@ -211,12 +213,12 @@ function applyVisibility() {
 
 function renderGroups() {
   $('#groups').innerHTML = S.cfg.inverters.groups.map((g, i) => `<div class="grow">
-    <input type="number" min="1" step="1" value="${g[0]}" data-g="${i},0" title="Nombre d'onduleurs">
-    <input type="number" min="1" step="1" value="${g[1]}" data-g="${i},1" title="Chaînes par onduleur">
+    <input type="number" min="1" step="1" value="${g[0] ?? ''}" data-g="${i},0" title="Nombre d'onduleurs">
+    <input type="number" min="1" step="1" value="${g[1] ?? ''}" data-g="${i},1" title="Chaînes par onduleur">
     <button type="button" data-del="${i}" title="Supprimer">×</button></div>`).join('') +
     '<div class="grow"><span>onduleurs</span><span>chaînes / onduleur</span><span></span></div>';
   $$('#groups [data-g]').forEach((el) => el.addEventListener('input', () => {
-    const [i, j] = el.dataset.g.split(',').map(Number); S.cfg.inverters.groups[i][j] = Number(el.value) || 0; onChange('inverters.groups');
+    const [i, j] = el.dataset.g.split(',').map(Number); S.cfg.inverters.groups[i][j] = el.value === '' ? null : Number(el.value); onChange('inverters.groups');
   }));
   $$('#groups [data-del]').forEach((b) => b.addEventListener('click', () => {
     if (S.cfg.inverters.groups.length > 1) { S.cfg.inverters.groups.splice(Number(b.dataset.del), 1); renderGroups(); onChange('inverters.groups'); }
@@ -360,7 +362,8 @@ function renderGsaTable() {
 let map, marker;
 function initMap() {
   if (!window.L) return;
-  map = L.map('map', { zoomControl: true, attributionControl: true }).setView([S.cfg.site.lat, S.cfg.site.lon], 9);
+  const hasLL = S.cfg.site.lat != null && S.cfg.site.lon != null;
+  map = L.map('map', { zoomControl: true, attributionControl: true }).setView(hasLL ? [S.cfg.site.lat, S.cfg.site.lon] : [46.6, 2.4], hasLL ? 9 : 5);
   // Fonds IGN (Géoplateforme, licence ouverte Etalab) ; OpenStreetMap en secours hors de France
   const ign = (layer, fmt) => L.tileLayer('https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=' + layer +
     '&STYLE=normal&TILEMATRIXSET=PM&FORMAT=' + fmt + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
@@ -370,14 +373,19 @@ function initMap() {
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' });
   plan.addTo(map);
   L.control.layers({ 'Plan IGN': plan, 'Photographies aériennes IGN': ortho, 'OpenStreetMap (hors France)': osm }, null, { position: 'topright' }).addTo(map);
-  marker = L.marker([S.cfg.site.lat, S.cfg.site.lon], { draggable: true }).addTo(map);
-  const setLL = (ll) => { S.cfg.site.lat = +ll.lat.toFixed(5); S.cfg.site.lon = +ll.lng.toFixed(5); fillForm(); onChange('site.lat'); };
-  map.on('click', (e) => { marker.setLatLng(e.latlng); setLL(e.latlng); });
-  marker.on('dragend', () => setLL(marker.getLatLng()));
+  if (hasLL) placeMarker([S.cfg.site.lat, S.cfg.site.lon]);
+  map.on('click', (e) => { placeMarker(e.latlng); setLL(e.latlng); });
   $('#sec-site').addEventListener('toggle', () => setTimeout(() => map.invalidateSize(), 50));
 }
+function setLL(ll) { S.cfg.site.lat = +ll.lat.toFixed(5); S.cfg.site.lon = +ll.lng.toFixed(5); fillForm(); onChange('site.lat'); }
+function placeMarker(ll) {
+  if (!map) return;
+  if (!marker) { marker = L.marker(ll, { draggable: true }).addTo(map); marker.on('dragend', () => setLL(marker.getLatLng())); }
+  else marker.setLatLng(ll);
+}
 function renderLinks() {
-  const { lat, lon } = S.cfg.site; if (lat == null || lon == null) return;
+  const { lat, lon } = S.cfg.site;
+  if (lat == null || lon == null) { const e = $('#dlLinks'); if (e) e.innerHTML = '<span class="hint">Renseigner les coordonnées du site pour obtenir les liens.</span>'; return; }
   const b = 'https://re.jrc.ec.europa.eu/api/v5_3/';
   const L2 = [
     ['TMY PVGIS (JSON, sans horizon)', `${b}tmy?lat=${lat}&lon=${lon}&usehorizon=0&outputformat=json`],
@@ -388,7 +396,7 @@ function renderLinks() {
     ['Carte GSA', `https://globalsolaratlas.info/map?c=${lat},${lon},11&s=${lat},${lon}&m=site`],
   ];
   $('#dlLinks').innerHTML = L2.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`).join('');
-  if (marker && (Math.abs(marker.getLatLng().lat - lat) > 1e-6 || Math.abs(marker.getLatLng().lng - lon) > 1e-6)) { marker.setLatLng([lat, lon]); map.setView([lat, lon]); }
+  if (map && (!marker || Math.abs(marker.getLatLng().lat - lat) > 1e-6 || Math.abs(marker.getLatLng().lng - lon) > 1e-6)) { placeMarker([lat, lon]); map.setView([lat, lon], Math.max(map.getZoom(), 9)); }
 }
 
 // ------------------------------------------------------------------ cohérence, alertes
@@ -418,13 +426,13 @@ function renderDerived() {
   const ond = S.info.ond && !S.info.ond.error ? S.info.ond : null;
   const ninv = c.inverters.groups.reduce((a, g) => a + g[0], 0);
   const sums = {
-    project: `${c.project.name} – ${c.project.variant}`, site: `${nf(c.site.lat, 4)} / ${nf(c.site.lon, 4)}`,
+    project: c.project.name ? `${c.project.name} – ${c.project.variant}` : 'à renseigner', site: c.site.lat == null ? 'à renseigner' : `${nf(c.site.lat, 4)} / ${nf(c.site.lon, 4)}`,
     meteo: S.files.tmy ? `TMY ✓${c.meteo.tmy_has_horizon ? ' · horizon PVGIS inclus' : ''}` : 'TMY manquant',
     gsa: c.meteo.gsa_mode === 'none' ? 'sans recalage' : (S.gsa ? `${c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'} ✓` : 'données manquantes'),
     horizon: S.files.horizon ? (c.horizon.use ? 'appliqué' : 'désactivé') : 'aucun',
     module: pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
     inverter: ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
-    structure: { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt}°` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
+    structure: { fixed: `Sheds ${c.structure.tilt ?? '–'}° / ${c.structure.azimuth ?? '–'}°`, tracker: `Tracker ±${c.structure.max_angle ?? '–'}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt ?? '–'}°` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
     shading: `${c.structure.elec_effect} % · ` + c.structure.shading_configs.map((x) => `${x.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} (${nf(x.share, 2)} %)`).join(' + '),
     bifacial: c.bifacial.enabled ? `albédo ${c.bifacial.albedo_ground}` : 'non',
     thermal: `Uc ${c.thermal.uc} · ${c.iam.mode === 'pan' ? 'IAM .PAN' : 'Fresnel'}`,
@@ -436,18 +444,35 @@ function renderDerived() {
 }
 
 async function runCheck() {
+  if (!(S.cfg.array.n_series > 0) || missingFields().includes("Groupes d'onduleurs")) { S.check = null; renderAlerts(); return; }
   if (!S.ready || !S.files.pan || !S.files.ond || (S.info.pan && S.info.pan.error) || (S.info.ond && S.info.ond.error)) { S.check = null; renderAlerts(); return; }
   try { S.check = await call('check', { pan: S.files.pan, ond: S.files.ond, cfg: S.cfg }); } catch (e) { S.check = { error: e.message }; }
   renderAlerts(); renderDerived();
 }
+const REQUIRED = [
+  ['site.lat', 'Latitude'], ['site.lon', 'Longitude'], ['site.alt', 'Altitude'],
+  ['structure.tilt', 'Inclinaison', (c) => c.structure.type !== 'tracker'], ['structure.pitch', 'Entraxe des rangées'],
+  ['structure.width', 'Largeur sensible'], ['structure.height', 'Hauteur du bord bas', (c) => c.structure.type !== 'tracker'],
+  ['structure.axis_height', "Hauteur de l'axe", (c) => c.structure.type === 'tracker'],
+  ['structure.n_rows', 'Nombre de rangées'], ['structure.n_high', 'Modules en hauteur'], ['array.n_series', 'Modules en série'],
+  ['losses.tr_sn_kva', 'Puissance transfo', (c) => c.losses.tr_enabled], ['losses.tr_iron_kw', 'Pertes fer', (c) => c.losses.tr_enabled],
+  ['losses.tr_cu_kw', 'Pertes cuivre nominales', (c) => c.losses.tr_enabled],
+];
+function missingFields() {
+  const c = S.cfg;
+  const out = REQUIRED.filter(([p, , cond]) => (!cond || cond(c)) && (get(c, p) == null || get(c, p) === '' || Number.isNaN(get(c, p)))).map(([, l]) => l);
+  if (!c.inverters.groups.length || c.inverters.groups.some((g) => !(g[0] > 0) || !(g[1] > 0))) out.push("Groupes d'onduleurs");
+  return out;
+}
 function localAlerts() {
   const out = []; const c = S.cfg;
+  const miss = missingFields();
+  if (miss.length) out.push({ level: 'block', title: 'Champs à renseigner', message: miss.join(', ') + '.' });
   if (c.meteo.gsa_mode !== 'none' && !S.gsa) out.push({ level: 'warn', title: 'Recalage GSA demandé', message: 'Aucune donnée Global Solar Atlas chargée : le TMY sera utilisé sans recalage.' });
   if (c.meteo.tmy_has_horizon && S.files.horizon && c.horizon.use) out.push({ level: 'warn', title: 'Masque lointain en double', message: "Le TMY contient déjà l'horizon PVGIS : le masque déposé s'ajoute (union des deux masques) et la ligne « masque lointain » du diagramme de pertes est sous-estimée." });
   if (S.info.tmy && !S.info.tmy.error && S.info.tmy.lat != null && (Math.abs(S.info.tmy.lat - c.site.lat) > 0.05 || Math.abs(S.info.tmy.lon - c.site.lon) > 0.05))
     out.push({ level: 'warn', title: 'Coordonnées', message: `Le TMY a été produit pour ${nf(S.info.tmy.lat, 3)} / ${nf(S.info.tmy.lon, 3)}, le site est saisi en ${nf(c.site.lat, 3)} / ${nf(c.site.lon, 3)}.`, fix: 'tmyll' });
-  if (c.structure.width >= c.structure.pitch) out.push({ level: 'block', title: 'Géométrie', message: "La largeur sensible doit être inférieure à l'entraxe." });
-  if (!(c.array.n_strings > 0)) out.push({ level: 'block', title: 'Câblage', message: 'Aucune chaîne : renseigner les groupes d\'onduleurs.' });
+  if (c.structure.width != null && c.structure.pitch != null && c.structure.width >= c.structure.pitch) out.push({ level: 'block', title: 'Géométrie', message: "La largeur sensible doit être inférieure à l'entraxe." });
   return out;
 }
 function renderAlerts() {
@@ -622,7 +647,7 @@ function renderHyp() {
 
 // ------------------------------------------------------------------ exports
 function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
-const baseName = () => `${S.cfg.project.name}_${S.cfg.project.variant}`.replace(/[^\w\-]+/g, '_');
+const baseName = () => `${S.cfg.project.name || 'projet'}_${S.cfg.project.variant || ''}`.replace(/[^\w\-]+/g, '_');
 $('#expXlsx').addEventListener('click', async () => {
   setStatus('Génération du classeur Excel…', 'busy', 60);
   try { const bytes = await call('xlsx'); download(baseName() + '_productible.xlsx', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); setStatus('Classeur Excel exporté.', 'ok', 100); }
@@ -640,23 +665,31 @@ $('#openProject').addEventListener('change', async (e) => {
   try { loadProject(JSON.parse(await f.text())); } catch (err) { setStatus('Ouverture impossible : ' + err.message, 'err', 100); }
   e.target.value = '';
 });
-function loadProject(d, keepModuleFiles) {
+function loadProject(d) {
   if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
-  const keep = keepModuleFiles ? { pan: S.files.pan, ond: S.files.ond, npan: S.names.pan, nond: S.names.ond } : null;
-  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null;
-  if (keep) { if (keep.pan && !S.files.pan) { S.files.pan = keep.pan; S.names.pan = keep.npan; } if (keep.ond && !S.files.ond) { S.files.ond = keep.ond; S.names.ond = keep.nond; } }
-  $('#results').hidden = true; fillForm(); syncStrings(); save(); refreshAll();
+  resetView();
+  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null; S.check = null;
+  fillForm(); syncStrings(); save(); refreshAll();
   setStatus(`Projet « ${S.cfg.project.name} – ${S.cfg.project.variant} » ouvert.` + (d.note ? ' ' + d.note : ''), 'ok', 100);
 }
-$('#btnExample').addEventListener('click', async () => {
-  setStatus('Chargement du projet test St-Seurin…', 'busy', 50);
-  try { loadProject(await (await fetch('exemples/St-Seurin_Var0.json')).json(), true); }
-  catch (err) { setStatus('Projet test indisponible : ' + err.message, 'err', 100); }
-});
+// Efface tout ce qui reste affiché du projet précédent (résultats, graphiques, champs libres, repère sur la carte).
+function resetView() {
+  $('#results').hidden = true;
+  Object.values(S.charts).forEach((c) => c.destroy()); S.charts = {};
+  ['#tiles', '#tblMonthly', '#shResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
+  $$('#form input[type=file]').forEach((i) => (i.value = ''));
+  const gp = $('#gsaPaste'); if (gp) gp.value = '';
+  $$('#form .hint[id^="info-"]').forEach((e) => { e.textContent = ''; e.style.color = ''; });
+  if (marker) { marker.remove(); marker = null; }
+  if (map) map.setView([46.6, 2.4], 5);
+}
 $('#btnNew').addEventListener('click', () => {
   if (!confirm('Repartir d\'un projet vierge ? Les saisies et fichiers actuels seront effacés.')) return;
+  resetView();
   S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.info = {}; S.res = null; S.check = null;
-  $('#results').hidden = true; fillForm(); save(); refreshAll();
+  fillForm(); syncStrings(); save(); refreshAll();
+  $$('details.sec').forEach((d) => (d.open = d.id === 'sec-project' || d.id === 'sec-site'));
+  setStatus('Nouveau projet : renseigner le site, déposer les fichiers puis lancer la simulation.', 'ok', 100);
 });
 $('#toggleSide').addEventListener('click', () => $('#side').classList.toggle('hide'));
 $$('#tabs button').forEach((b) => b.addEventListener('click', () => {
