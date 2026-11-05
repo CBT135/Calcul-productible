@@ -158,7 +158,10 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
   #report .kpis div{flex:1;border:1px solid #ccc;border-radius:2mm;padding:2.5mm}
   #report .kpis b{display:block;font-size:14pt}
   #report .cols{display:flex;gap:6mm} #report .cols>div{flex:1}
-  #report td,#report th{white-space:normal!important;overflow-wrap:anywhere}
+  html,body{background:#fff!important}
+  #report td,#report th{white-space:normal!important;overflow-wrap:normal;word-break:normal}
+  #report table.wide td:nth-child(n+5){white-space:nowrap!important}
+  #report table.wide td:nth-child(6){white-space:normal!important}
   #report table.wide{font-size:7.6pt}
   #report table.wide th,#report table.wide td{padding:1.1mm 1.2mm}
   #report .hyp .stack>div{margin-bottom:3mm}
