@@ -1,5 +1,5 @@
 """
-Calcul productible - moteur de simulation PV horaire de type PVsyst, basé sur pvlib.
+Calcul productible - moteur de simulation PV au pas horaire, basé sur pvlib.
 
 Chaîne de calcul (pas horaire) :
   TMY PVGIS (CSV/JSON) -> recalage optionnel Global Solar Atlas (mensuel ou annuel, GHI/DIF, T° en option)
@@ -519,7 +519,7 @@ DEFAULTS = dict(
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
     meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=False),
     horizon=dict(use=True),
-    structure=dict(type='fixed', tilt=16.0, azimuth=0.0, az_convention='pvsyst', pitch=9.01, width=7.19, height=0.80,
+    structure=dict(type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
                    shading_configs=[dict(sub_in_height=None, share=100.0)],
                    axis_azimuth=0.0, max_angle=55.0, backtrack=True, axis_height=1.5),
@@ -594,7 +594,7 @@ def _simulate_one(cfg_in, files):
     stype = st['type']
     # Azimuts saisis en convention PVsyst (0 = Sud, Est < 0, Ouest > 0) ; pvlib : 180 = Sud.
     # 'az_convention': 'pvlib' conserve l'ancienne saisie (180 = Sud) pour les appels Python existants.
-    to_pvlib = (lambda a: (float(a) + 180.0) % 360) if st.get('az_convention', 'pvsyst') == 'pvsyst' \
+    to_pvlib = (lambda a: (float(a) + 180.0) % 360) if st.get('az_convention', 'sud0') in ('sud0', 'pvsyst') \
         else (lambda a: float(a) % 360)
     if stype == 'tracker':
         # axe : PVsyst 0 = axe Nord-Sud (rotation vers l'Est le matin) -> pvlib axis_azimuth 180
@@ -602,7 +602,7 @@ def _simulate_one(cfg_in, files):
                       max_angle=float(st['max_angle']), backtrack=bool(st['backtrack']), name='Tracker')]
     elif stype == 'ew':
         # orientation du faîtage : 0 (Sud) -> pan Est à -90° et pan Ouest à +90° (PVsyst)
-        o = float(st.get('azimuth') or 0.0) if st.get('az_convention', 'pvsyst') == 'pvsyst' else float(st.get('azimuth', 180.0)) - 180.0
+        o = float(st.get('azimuth') or 0.0) if st.get('az_convention', 'sud0') in ('sud0', 'pvsyst') else float(st.get('azimuth', 180.0)) - 180.0
         faces = [dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o - 90.0 + 180.0) % 360,
                       azimuth_pvsyst=((o - 90.0 + 180.0) % 360) - 180.0, name='Est'),
                  dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o + 90.0 + 180.0) % 360,

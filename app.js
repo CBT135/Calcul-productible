@@ -9,7 +9,7 @@ const DEFAULTS = {
   site: { lat: null, lon: null, alt: null, albedo: 0.20 },
   meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: false },
   horizon: { use: true },
-  structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'pvsyst', pitch: null, width: null, height: null, n_rows: null,
+  structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'sud0', pitch: null, width: null, height: null, n_rows: null,
     n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
     shading_configs: [{ sub_in_height: null, share: 100 }],
     axis_azimuth: 0, max_angle: 55, backtrack: true, axis_height: 1.5 },
@@ -96,9 +96,17 @@ function sel(path, label, opts, o = {}) {
 function chk(path, label, o = {}) {
   return `<div class="fld full" ${o.show ? `data-show="${o.show}"` : ''}><label class="chk"><input type="checkbox" data-path="${path}"> ${label}</label>${o.hint ? `<div class="hint">${o.hint}</div>` : ''}</div>`;
 }
+// Lien de téléchargement des données du site, affiché au-dessus de la zone de dépôt correspondante
+const DL = {
+  tmy: ['TMY PVGIS (JSON)', (la, lo) => `https://re.jrc.ec.europa.eu/api/v5_3/tmy?lat=${la}&lon=${lo}&usehorizon=0&outputformat=json`],
+  horizon: ['Horizon PVGIS (CSV)', (la, lo) => `https://re.jrc.ec.europa.eu/api/v5_3/printhorizon?lat=${la}&lon=${lo}&outputformat=csv`],
+  gsa: ['Global Solar Atlas (JSON)', (la, lo) => `https://api.globalsolaratlas.info/data/lta?loc=${la},${lo}`],
+  pvgis_monthly: ['PVGIS mensuel (CSV)', (la, lo) => `https://re.jrc.ec.europa.eu/api/v5_3/MRcalc?lat=${la}&lon=${lo}&horirrad=1&avtemp=1&outputformat=csv`],
+};
 function drop(key, hint) {
   const f = FILES[key];
   return `<div class="fld full"><label>${f.label}${f.req ? '<i>obligatoire</i>' : '<i>optionnel</i>'}</label>
+    ${DL[key] ? `<div class="links dl" id="dl-${key}"></div>` : ''}
     <div class="drop" data-drop="${key}"><span class="ico">⇪</span><div class="dtxt" data-hint="${esc(hint || '')}"><b>Déposer ou choisir un fichier</b>${hint || ''}</div>
     <input type="file" accept="${f.accept}" hidden></div><div class="hint" id="info-${key}"></div></div>`;
 }
@@ -112,35 +120,33 @@ function buildForm() {
     section('project', 'Projet', txt('project.name', 'Nom du projet', { full: true }) + txt('project.variant', 'Variante') + txt('project.author', 'Auteur'), true),
     section('site', 'Site', num('site.lat', 'Latitude', '°N', { step: 0.0001 }) + num('site.lon', 'Longitude', '°E', { step: 0.0001 }) +
       num('site.alt', 'Altitude', 'm') + num('site.albedo', 'Albédo du site', '', { step: 0.01, hint: 'Albédo vu par la face avant.' }) +
-      `<div class="fld full"><div id="map"></div><div class="hint">Cliquer sur la carte ou déplacer le repère pour placer le site.</div>
-      <label style="margin-top:8px">Télécharger les données pour ces coordonnées</label><div class="links" id="dlLinks"></div>
-      <div class="hint">Chaque lien ouvre les données du site dans un nouvel onglet. Enregistrer la page (Ctrl+S / ⌘S) : le fichier .htm obtenu se dépose tel quel dans l'application.</div></div>`, true),
+      `<div class="fld full"><div id="map"></div><div class="hint">Cliquer sur la carte ou déplacer le repère pour placer le site. Les liens de téléchargement des données du site apparaissent au-dessus de chaque fichier à déposer : la page s'ouvre dans un nouvel onglet, l'enregistrer (Ctrl+S / ⌘S) puis déposer le fichier .htm obtenu.</div></div>`, true),
     section('meteo', 'Météo', drop('tmy', '<span>TMY PVGIS 5.3 au format CSV ou JSON</span>') +
       chk('meteo.tmy_has_horizon', "Le TMY a été téléchargé avec l'horizon PVGIS (« usehorizon »)", { hint: "Lu automatiquement dans un fichier JSON. Pour un CSV, cocher si l'option horizon était active : le masque PVGIS est alors déjà dans le direct. Recommandé : TMY sans horizon + masque déposé ci-dessous." }) +
       ''),
-    section('horizon', 'Masque lointain', drop('horizon', '<span>CSV PVsyst (Azimut;Hauteur, 0 = Sud, Est &lt; 0) ou horizon PVGIS</span>') +
+    section('horizon', 'Masque lointain', drop('horizon', '<span>CSV Azimut;Hauteur (0 = Sud, Est &lt; 0) ou horizon PVGIS</span>') +
       chk('horizon.use', 'Appliquer le masque (direct coupé sous l\'horizon, diffus réduit)')),
     section('gsa', 'Global Solar Atlas', sel('meteo.gsa_mode', 'Recalage du TMY', [['monthly', 'Mensuel (GHI et DIF, 12 mois)'], ['annual', 'Annuel (GHI et DIF)'], ['none', 'Aucun (TMY brut)']], { full: true }) +
       chk('meteo.gsa_align_temp', 'Recaler aussi la température mensuelle sur GSA') +
       drop('gsa', '<span>JSON de l\'API GSA (.json ou page .htm enregistrée), ou coller le texte ci-dessous</span>') +
       `<div class="fld full"><textarea id="gsaPaste" placeholder='Coller ici la réponse JSON de https://api.globalsolaratlas.info/data/lta?loc=lat,lon'></textarea></div>
       <div class="fld full" id="gsaTable"></div>`),
-    section('module', 'Modules', drop('pan', '<span>Fichier PVsyst .PAN</span>') +
+    section('module', 'Modules', drop('pan', '<span>Fichier .PAN (format texte)</span>') +
       num('array.n_series', 'Modules en série', '', { step: 1, min: 1 }) + num('array.n_strings', 'Nombre de chaînes', '', { ro: true, hint: 'Calculé à partir des groupes d\'onduleurs.' }) +
       num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
       `<div class="fld"><label>Puissance DC</label><input type="text" id="pdcOut" readonly></div>`),
-    section('inverter', 'Onduleurs', drop('ond', '<span>Fichier PVsyst .OND</span>') +
+    section('inverter', 'Onduleurs', drop('ond', '<span>Fichier .OND (format texte)</span>') +
       `<div class="fld full groups"><label>Groupes d'onduleurs<i>nb onduleurs × chaînes par onduleur</i></label><div id="groups"></div>
       <button type="button" class="mini" id="addGroup">+ Ajouter un groupe</button></div>` +
       num('inverters.t_offset', 'Offset de température autour des onduleurs', '°C', { step: 0.5, full: true, hint: 'Ajouté à la température ambiante pour le déclassement en puissance (courbe Pmax / Pnom / PLim du .OND).' }) +
       num('inverters.p_inj_kw', "Limite de puissance d'injection", 'kW', { ph: 'aucune', full: true })),
     section('structure', 'Structure', `<div class="fld full"><label>Type de structure</label><div class="seg" id="stype">
-        <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="tracker">Tracker mono-axe</button><button type="button" data-v="ew">Est-Ouest</button></div></div>` +
+        <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="tracker" hidden>Tracker mono-axe</button><button type="button" data-v="ew">Est-Ouest</button></div></div>` +
       num('structure.tilt', 'Inclinaison', '°', { show: 'structure.type!=tracker' }) +
-      num('structure.azimuth', 'Azimut (PVsyst)', '°', { show: st('fixed'), hint: '0 = Sud, Est &lt; 0, Ouest &gt; 0.', title: 'Convention PVsyst' }) +
-      `<div class="fld" data-show="structure.type==ew"><label>Orientation du faîtage (PVsyst)<i>°</i></label><input type="number" step="any" data-path="structure.azimuth" title="Convention PVsyst">
+      num('structure.azimuth', 'Azimut', '°', { show: st('fixed'), hint: '0 = Sud, Est &lt; 0, Ouest &gt; 0.' }) +
+      `<div class="fld" data-show="structure.type==ew"><label>Orientation du faîtage<i>°</i></label><input type="number" step="any" data-path="structure.azimuth">
         <div class="hint" id="ewHint">0 = Sud : pan Est à −90°, pan Ouest à +90°.</div></div>` +
-      num('structure.axis_azimuth', "Azimut de l'axe (PVsyst)", '°', { show: st('tracker'), hint: '0 = axe Nord-Sud (rotation Est-Ouest).' }) +
+      num('structure.axis_azimuth', "Azimut de l'axe", '°', { show: st('tracker'), hint: '0 = axe Nord-Sud (rotation Est-Ouest).' }) +
       num('structure.max_angle', 'Rotation maximale', '±°', { show: st('tracker') }) +
       chk('structure.backtrack', 'Backtracking', { show: st('tracker') }) +
       num('structure.pitch', 'Entraxe des rangées', 'm', { hint: 'Est-Ouest : distance entre faîtages.' }) +
@@ -151,7 +157,7 @@ function buildForm() {
       num('structure.n_high', 'Modules en hauteur', '', { step: 1, min: 1 }) +
       sel('structure.orientation', 'Pose des modules', [['portrait', 'Portrait'], ['landscape', 'Paysage']]) +
       `<div class="fld"><label>GCR / angle limite</label><input type="text" id="gcrOut" readonly></div>`),
-    section('shading', 'Ombrage électrique', num('structure.elec_effect', "Fraction de l'effet électrique", '%', { hint: 'Ombrage « selon les chaînes » de PVsyst.' }) +
+    section('shading', 'Ombrage électrique', num('structure.elec_effect', "Fraction de l'effet électrique", '%', { hint: 'Perte électrique des sous-chaînes partiellement ombrées.' }) +
       `<div class="fld full groups"><label>Configurations de câblage<i>sous-chaînes en hauteur · % des tables</i></label><div id="shconfs"></div>
       <button type="button" class="mini" id="addShconf">+ Ajouter une configuration</button>
       <div class="hint">Une étude de productible est calculée par configuration, puis les résultats sont moyennés au prorata des tables. Le total doit faire 100 %. Les chaînes suivent les rangées ; « auto » = 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, 3 par module paysage.</div></div>`),
@@ -387,17 +393,13 @@ function placeMarker(ll) {
 }
 function renderLinks() {
   const { lat, lon } = S.cfg.site;
-  if (lat == null || lon == null) { const e = $('#dlLinks'); if (e) e.innerHTML = '<span class="hint">Renseigner les coordonnées du site pour obtenir les liens.</span>'; return; }
-  const b = 'https://re.jrc.ec.europa.eu/api/v5_3/';
-  const L2 = [
-    ['TMY PVGIS (JSON, sans horizon)', `${b}tmy?lat=${lat}&lon=${lon}&usehorizon=0&outputformat=json`],
-    ['TMY PVGIS (CSV)', `${b}tmy?lat=${lat}&lon=${lon}&usehorizon=0&outputformat=csv`],
-    ['Horizon PVGIS (CSV)', `${b}printhorizon?lat=${lat}&lon=${lon}&outputformat=csv`],
-    ['PVGIS mensuel (CSV)', `${b}MRcalc?lat=${lat}&lon=${lon}&horirrad=1&avtemp=1&outputformat=csv`],
-    ['Global Solar Atlas (JSON)', `https://api.globalsolaratlas.info/data/lta?loc=${lat},${lon}`],
-    ['Carte GSA', `https://globalsolaratlas.info/map?c=${lat},${lon},11&s=${lat},${lon}&m=site`],
-  ];
-  $('#dlLinks').innerHTML = L2.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`).join('');
+  const ok = lat != null && lon != null;
+  for (const [key, [label, url]] of Object.entries(DL)) {
+    const e = $('#dl-' + key); if (!e) continue;
+    e.innerHTML = ok ? `<a href="${url(lat, lon)}" target="_blank" rel="noopener" title="Ouvre les données du site dans un nouvel onglet : l'enregistrer (Ctrl+S / ⌘S) puis déposer le fichier ci-dessous">⤓ ${label}</a>`
+      : '<span class="hint">Renseigner les coordonnées du site pour obtenir le lien de téléchargement.</span>';
+  }
+  if (!ok) return;
   if (map && (!marker || Math.abs(marker.getLatLng().lat - lat) > 1e-6 || Math.abs(marker.getLatLng().lng - lon) > 1e-6)) { placeMarker([lat, lon]); map.setView([lat, lon], Math.max(map.getZoom(), 9)); }
 }
 
@@ -427,7 +429,7 @@ function renderDerived() {
     la = ` · angle limite ${nf(Math.atan(Math.sin(t) / (r - Math.cos(t))) * 180 / Math.PI, 1)}°`;
   }
   $('#gcrOut').value = `GCR ${pf(gcr, 1)}${la}`;
-  const eh = $('#ewHint'); if (eh) eh.textContent = `0 = Sud. Ici : ${ewFaces(c.structure.azimuth)} (PVsyst).`;
+  const eh = $('#ewHint'); if (eh) eh.textContent = `0 = Sud, Est < 0, Ouest > 0. Ici : ${ewFaces(c.structure.azimuth)}.`;
   if (S.check && S.check.sub_in_height) $$('#shconfs [data-sh$=",sub_in_height"]').forEach((el) => (el.placeholder = `auto (${S.check.sub_in_height})`));
   // résumés des sections
   const ond = S.info.ond && !S.info.ond.error ? S.info.ond : null;
@@ -580,7 +582,7 @@ function drawCharts() {
   const lab = { '06-21': '21 juin', '03-20': '20 mars', '12-21': '21 décembre' };
   r.sunpaths.forEach((p, i) => ds.push({ label: 'Soleil ' + lab[p.date], data: p.az.map((x, j) => ({ x, y: p.el[j] })), borderColor: cols[i], pointRadius: 0, borderWidth: 2, fill: false, showLine: true }));
   chart('chMask', { type: 'scatter', data: { datasets: ds.map((d) => Object.assign({ showLine: true }, d)) },
-    options: { maintainAspectRatio: false, scales: { x: { min: -180, max: 180, ticks: { stepSize: 30 }, title: { display: true, text: 'Azimut PVsyst (°) – 0 = Sud, Est < 0' }, grid: { color: '#eef1f4' } }, y: { min: 0, max: 75, title: { display: true, text: 'Hauteur (°)' }, grid: { color: '#eef1f4' } } }, plugins: { legend: { position: 'bottom' } } } });
+    options: { maintainAspectRatio: false, scales: { x: { min: -180, max: 180, ticks: { stepSize: 30 }, title: { display: true, text: 'Azimut (°) – 0 = Sud, Est < 0' }, grid: { color: '#eef1f4' } }, y: { min: 0, max: 75, title: { display: true, text: 'Hauteur (°)' }, grid: { color: '#eef1f4' } } }, plugins: { legend: { position: 'bottom' } } } });
   const l = r.losses.find((x) => x.label.startsWith('Masque'));
   $('#maskNote').textContent = r.horizon ? `Perte due au masque lointain : ${nf(l.pct, 2)} % de l'irradiation dans le plan. Facteur diffus : ${r.faces.map((f) => `${f.name} ${nf(f.horizon_diffuse_factor, 3)}`).join(', ')}.` : 'Aucun masque lointain appliqué' + (r.tmy_info.use_horizon ? " (l'horizon PVGIS est inclus dans le TMY)." : '.');
 }
@@ -640,7 +642,7 @@ function renderHyp() {
     ['Groupes', c.inverters.groups.map(([a, b]) => `${a} × ${b} chaînes`).join(' + ') + ` · DC/AC ${nf(s.dc_ac, 2)}`],
     ['Plage MPPT / Vmax / Imax DC', `${nf(ond.vmin)}–${nf(ond.vmax)} V · ${nf(ond.vabsmax)} V · ${nf(ond.imax_dc)} A`],
     ['Tension MPP moyenne', `${nf(s.vmpp_mean)} V`]])}</div><div>${kv([
-    ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}° (PVsyst), ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°, faîtage ${c.structure.azimuth}° (PVsyst) : ${ewFaces(c.structure.azimuth)}` }[c.structure.type]],
+    ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}°, ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°, faîtage ${c.structure.azimuth}° : ${ewFaces(c.structure.azimuth)}` }[c.structure.type]],
     ['Géométrie', `entraxe ${c.structure.pitch} m · largeur ${c.structure.width} m · GCR ${pf(s.gcr, 1)}${s.limit_angle != null ? ` · angle limite ${nf(s.limit_angle, 1)}°` : ''} · ${c.structure.n_rows} rangées`],
     ['Ombrage électrique', `${c.structure.elec_effect} % · ` + (r.shading_configs || []).map((x) => `${x.sub_in_height} sous-chaînes en hauteur sur ${nf(x.share, 2)} % des tables`).join(' + ')],
     ['Ombrage proche du diffus', r.faces.map((f) => `${f.name} ${pf(f.diffuse_attenuation, 1)}`).join(', ')],
@@ -726,7 +728,7 @@ $('#expPdf').addEventListener('click', () => {
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
     ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
     <h2 class="pb">Hypothèses détaillées</h2>${$('#hypBox').innerHTML.replace(/<h3>.*?<\/h3>/, '').replace(/class="two"/, 'class="cols"')}
-    <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle une diode PVsyst, courbes .OND). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
+    <div class="foot">Calcul productible – simulation horaire pvlib (Perez, sheds 2D, modèle à une diode, courbes de rendement onduleur). Résultats indicatifs, à confronter à un logiciel de référence pour un usage contractuel. Crédits : pvlib (BSD 3-Clause), Pyodide (MPL 2.0) ; données PVGIS © Union européenne (JRC) et Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) selon les fichiers utilisés.</div>`;
   $('#report').innerHTML = html;
   $$('.tab').forEach((t) => t.classList.toggle('on', t.id === 'tab-' + $('#tabs button.on').dataset.tab));
   setTimeout(() => window.print(), 300);
@@ -741,7 +743,7 @@ function migrate(raw) {
     const conv = (a) => (a == null ? a : ((((Number(a) - 180) % 360) + 540) % 360) - 180);
     cfg.structure.azimuth = rs.type === 'ew' ? 0 : conv(rs.azimuth ?? 180);
     cfg.structure.axis_azimuth = conv(rs.axis_azimuth ?? 180);
-    cfg.structure.az_convention = 'pvsyst';
+    cfg.structure.az_convention = 'sud0';
   }
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;

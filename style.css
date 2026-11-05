@@ -161,3 +161,7 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
   #report .foot{color:#5d6b7a;font-size:8.5pt;margin-top:6mm}
   * {-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+
+.links.dl{margin:0 0 6px}
+.links.dl a{background:#fff;border-color:#c5ccd4;font-weight:600}
+.links.dl a:hover{background:var(--chip)}

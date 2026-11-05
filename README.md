@@ -1,6 +1,6 @@
 # Calcul productible PV
 
-Application web d'estimation de productible photovoltaïque, de type PVsyst, qui fonctionne entièrement dans le navigateur. Le moteur de calcul est écrit en Python (pvlib) et tourne localement grâce à [Pyodide](https://pyodide.org) : aucune donnée n'est envoyée à un serveur.
+Application web d'estimation de productible photovoltaïque au pas horaire, qui fonctionne entièrement dans le navigateur. Le moteur de calcul est écrit en Python (pvlib) et tourne localement grâce à [Pyodide](https://pyodide.org) : aucune donnée n'est envoyée à un serveur.
 
 **Application en ligne :** https://cbt135.github.io/Calcul-productible/
 
@@ -8,11 +8,10 @@ Application web d'estimation de productible photovoltaïque, de type PVsyst, qui
 
 1. **Site** : saisir les coordonnées, ou cliquer sur la carte. Les liens générés ouvrent directement les données PVGIS et Global Solar Atlas pour ce point. Enregistrer chaque page (Ctrl+S / ⌘S) puis déposer le fichier dans l'application.
 2. **Météo** : déposer le TMY PVGIS 5.3 (CSV ou JSON), de préférence **sans horizon** (`usehorizon=0`), le masque étant appliqué par l'application. Déposer ou coller le JSON Global Solar Atlas pour recaler le TMY (mensuel ou annuel).
-3. **Masque lointain** (optionnel) : CSV PVsyst (`Azimut;Hauteur`, 0 = Sud, Est négatif) ou fichier horizon PVGIS.
-4. **Modules et onduleurs** : déposer les fichiers PVsyst `.PAN` et `.OND`, puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
-5. **Structure** : sheds fixes, tracker mono-axe (avec ou sans backtracking) ou Est-Ouest ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en **convention PVsyst** (0 = Sud, Est négatif, Ouest positif) :
+3. **Masque lointain** (optionnel) : CSV `Azimut;Hauteur` (0 = Sud, Est négatif) ou fichier horizon PVGIS.
+4. **Modules et onduleurs** : déposer les fichiers `.PAN` et `.OND` (format texte), puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
+5. **Structure** : sheds fixes ou Est-Ouest ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en convention **0 = Sud** (0 = Sud, Est négatif, Ouest positif) :
    - **sheds** : azimut des modules ;
-   - **tracker** : azimut de l'axe, 0 = axe Nord-Sud ;
    - **Est-Ouest** : orientation du faîtage. 0 = Sud, ce qui donne un pan Est à −90° et un pan Ouest à +90°. Une orientation de 20° donne −70° et +110°.
 
    Les projets enregistrés avant cette convention, où 180 valait Sud, sont convertis automatiquement à l'ouverture.
@@ -38,12 +37,12 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 - **Ombrage électrique** « selon les chaînes », avec une ou plusieurs configurations (sous-chaînes en hauteur × part des tables, total 100 %). Une étude complète est calculée par configuration, puis toutes les grandeurs sont moyennées au prorata des tables. Fraction de l'effet électrique paramétrable ; les chaînes suivent les rangées. En mode « auto », on compte 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, et 3 par module paysage.
 - **Face arrière** : pvlib *infinite sheds* (Hay-Davies), avec ombrage arrière, mismatch arrière et fraction transparente.
 - **IAM** : Fresnel avec couche antireflet, ou profil utilisateur du `.PAN`.
-- **Module** : modèle à une diode PVsyst (`calcparams_pvsyst`). Les paramètres Rs, Rsh(G), γ, μγ et μIsc sont lus dans le `.PAN`. IL et I0 sont calculés à partir d'Isc et de Voc.
-- **Thermique** : modèle PVsyst (Uc, Uv, absorption du `.PAN`).
+- **Module** : modèle à une diode (`pvlib.pvsystem.calcparams_pvsyst`). Les paramètres Rs, Rsh(G), γ, μγ et μIsc sont lus dans le `.PAN`. IL et I0 sont calculés à partir d'Isc et de Voc.
+- **Thermique** : bilan thermique Uc / Uv (absorption du `.PAN`).
 - **Pertes DC** : LID, qualité, mismatch des modules et des chaînes, pertes ohmiques proportionnelles au courant.
 - **Onduleurs** : courbes Pin→Pout du `.OND` aux trois tensions, interpolées sur la tension MPP du champ. Sont aussi pris en compte : le seuil de démarrage, la sortie de plage MPPT basse, et la Pmax déclassée selon la température ambiante + **offset** (TPMax → TPNom → TPLim1 → TPLimAbs).
 - **AC et système** : auxiliaires, pertes ohmiques AC et ligne HTA (quadratiques), transformateur (fer 24 h/24 ou non, cuivre quadratique), limite d'injection, indisponibilité.
-- **PR** : E_grid / (GlobInc × P_nom STC), avec GlobInc calculé avant le masque lointain (définition PVsyst).
+- **PR** : E_grid / (GlobInc × P_nom STC), avec GlobInc calculé avant le masque lointain.
 - **P50 / P90** : σ = racine de la somme des carrés des incertitudes, Px = P50 × (1 − z<sub>x</sub> σ). La variabilité météo interannuelle est calculée à partir du CSV « Monthly data » de PVGIS (écart-type / moyenne des années complètes) s'il est fourni.
 
 ## Structure du dépôt
@@ -82,4 +81,4 @@ Les composants tiers sont détaillés dans la page [Crédits et licences](credit
   - Global Solar Atlas 2.0 © Solargis / World Bank Group (CC BY 4.0) ;
   - fonds de carte © IGN – Géoplateforme (Licence ouverte Etalab) et © OpenStreetMap (ODbL).
 
-Les résultats sont indicatifs et fournis sans garantie. La méthodologie est comparable à celle de PVsyst, sans affiliation avec PVsyst SA.
+Les résultats sont indicatifs et fournis sans garantie.
