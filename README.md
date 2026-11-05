@@ -31,6 +31,13 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 ### Toiture
 
 - **Champs** : un champ par pan de toit (bouton « + Ajouter un toit »). Chaque champ a son inclinaison, son orientation (0 = Sud, Est < 0), sa zone de calepinage (longueur horizontale × hauteur selon la pente), sa pose (portrait ou paysage) et l'espacement entre modules.
+- **Relevé sur vue aérienne** : un clic dans l'orientation, la longueur ou la hauteur d'un champ (ou le bouton « Vue aérienne ») ouvre les photographies aériennes IGN centrées sur le site, avec zoom à la molette. On clique ensuite quatre points :
+  1. bord bas gauche ;
+  2. bord bas droit ;
+  3. bord haut droit ;
+  4. bord haut gauche.
+
+  La zone est rendue rectangulaire. La longueur est la distance 1-2, l'orientation est perpendiculaire à 1-2 (face vers le bas de pente), et la hauteur en plan est ramenée selon la pente avec l'inclinaison. À la fermeture, l'inclinaison, l'orientation, la longueur et la hauteur du champ sont renseignées, et le relevé est mémorisé. « Saisir à la main » désactive l'ouverture automatique pour ce champ.
 - **Calepinage** : l'application propose le nombre de modules à l'horizontale et à la verticale, et donc la puissance posable, à partir des dimensions du module affecté. Ces nombres peuvent être forcés.
 - **Affectation** : chaque champ reçoit un module et un onduleur, choisis parmi le fichier principal et les fichiers supplémentaires (« + Ajouter un module / un onduleur »), ainsi que son câblage (modules en série, nombre d'onduleurs, chaînes par onduleur). Le nombre de modules câblés est comparé au calepinage : un dépassement bloque la simulation, un manque déclenche une alerte.
 - **Ombrages** : il n'y a pas d'ombrage entre rangées, et tout ce qui est derrière le plan des modules est masqué. Chaque champ peut recevoir son propre masque proche (CSV `Azimut;Hauteur`), qui s'ajoute au masque lointain.

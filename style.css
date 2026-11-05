@@ -174,3 +174,17 @@ table.kv td:first-child{color:var(--muted);white-space:normal}
 .fro{font-size:12px;color:var(--muted);line-height:1.5;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 9px}
 .fro b{color:var(--ink)}
 label.mini.filebtn{display:inline-block;cursor:pointer;font-weight:500;color:var(--ink)}
+
+#roofModal{position:fixed;inset:0;background:rgba(14,20,24,.55);z-index:2000;display:flex;align-items:center;justify-content:center;padding:2vh 2vw}
+#roofModal[hidden]{display:none}
+.rmbox{background:#fff;border-radius:12px;width:min(1200px,96vw);height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.rmhead{display:flex;align-items:center;gap:14px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.rmhead b{font-size:14px;flex:1}
+.rmhead input{padding:4px 6px}
+.rmx{border:0;background:none;font-size:24px;cursor:pointer;color:var(--muted);line-height:1}
+.rmbar{display:flex;gap:16px;flex-wrap:wrap;padding:8px 14px;font-size:13px;background:var(--chip)}
+#rmStep{color:var(--ink)} #rmInfo{color:var(--muted)} #rmInfo b{color:var(--ink)}
+#rmMap{flex:1;cursor:crosshair}
+.rmfoot{display:flex;gap:8px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.rmpt span{display:flex;width:22px;height:22px;border-radius:50%;background:#f2a20c;color:#18212b;font:700 12px Inter,sans-serif;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.fchead .mini{white-space:nowrap}

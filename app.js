@@ -293,7 +293,7 @@ function renderRoof() {
   box.innerHTML = F.map((f, i) => {
     const L = layout(f), nm = S.near[f.id];
     return `<div class="fieldcard">
-      <div class="fchead"><input type="text" value="${esc(f.name)}" data-f="${i},name" title="Nom du champ"><button type="button" class="mini" data-fdel="${i}" ${F.length < 2 ? 'hidden' : ''} title="Supprimer ce toit">Supprimer</button></div>
+      <div class="fchead"><input type="text" value="${esc(f.name)}" data-f="${i},name" title="Nom du champ"><button type="button" class="mini" data-fmap="${i}" title="Relever orientation et dimensions sur la vue aérienne">Vue aérienne</button><button type="button" class="mini" data-fdel="${i}" ${F.length < 2 ? 'hidden' : ''} title="Supprimer ce toit">Supprimer</button></div>
       <div class="grid">
         ${n(i, 'tilt', 'Inclinaison', '°')}${n(i, 'azimuth', 'Orientation', '° (0 = Sud, Est &lt; 0)')}
         ${n(i, 'length', 'Longueur de la zone', 'm (horizontale)')}${n(i, 'height', 'Hauteur de la zone', 'm (selon la pente)')}
@@ -310,6 +310,12 @@ function renderRoof() {
         <div class="fld full fro" id="fro-${i}">${fieldReadout(f, i)}</div>
       </div></div>`;
   }).join('');
+  // un clic dans orientation, longueur ou hauteur ouvre le relevé sur la vue aérienne (sauf en saisie manuelle)
+  $$('#roofFields [data-f$=",azimuth"], #roofFields [data-f$=",length"], #roofFields [data-f$=",height"]').forEach((el) => el.addEventListener('click', () => {
+    const i = +el.dataset.f.split(',')[0];
+    if (!RMANUAL.has(F[i].id)) openRoofMap(i);
+  }));
+  $$('#roofFields [data-fmap]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.fmap; RMANUAL.delete(F[i].id); openRoofMap(i); }));
   $$('#roofFields [data-f]').forEach((el) => el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => {
     const [i, k] = el.dataset.f.split(','); const f = F[+i];
     f[k] = el.tagName === 'SELECT' ? (k === 'orientation' ? el.value : Number(el.value)) : el.type === 'number' ? (el.value === '' ? null : Number(el.value)) : el.value;
@@ -326,6 +332,119 @@ function renderRoof() {
     try { if (S.ready) await call('horizon', { text }); S.near[f.id] = { name: file.name, text }; renderRoof(); save(); }
     catch (e) { setStatus(`Masque proche « ${file.name} » illisible : ${e.message}`, 'err', 100); }
   }));
+}
+// ------------------------------------------------------------------ relevé de toiture sur vue aérienne
+// Clics : 1 bord bas gauche, 2 bord bas droit, 3 bord haut droit, 4 bord haut gauche. La zone est rendue
+// rectangulaire : la longueur est la distance 1-2, l'orientation est perpendiculaire à 1-2 (vers le bas de pente),
+// la hauteur en plan est la moyenne des distances des points 3 et 4 à la droite 1-2, ramenée selon la pente.
+const RMANUAL = new Set();
+let RM = null, rmap = null, rlayer = null;
+const STEPS = ['bord bas gauche', 'bord bas droit', 'bord haut droit', 'bord haut gauche'];
+function rmXY(ll) { const o = RM.o; return [(ll.lng - o.lng) * Math.cos(o.lat * Math.PI / 180) * 111320, (ll.lat - o.lat) * 110540]; }
+function rmLL(p) { const o = RM.o; return L.latLng(o.lat + p[1] / 110540, o.lng + p[0] / (Math.cos(o.lat * Math.PI / 180) * 111320)); }
+function rmCompute(pts) {
+  if (pts.length < 2) return null;
+  const [a, b] = pts.map(rmXY); const d = [b[0] - a[0], b[1] - a[1]]; const len = Math.hypot(d[0], d[1]);
+  if (len < 0.05) return null;
+  const u = [d[0] / len, d[1] / len];
+  let n = [u[1], -u[0]];                       // face des modules (vers le bas de pente), à droite de 1→2 vu du haut
+  let up = [-n[0], -n[1]];
+  const others = pts.slice(2).map(rmXY);
+  if (others.length) {
+    const s0 = (others[0][0] - a[0]) * up[0] + (others[0][1] - a[1]) * up[1];
+    if (s0 < 0) { n = [-n[0], -n[1]]; up = [-up[0], -up[1]]; }   // le haut de toiture est du côté du point 3
+  }
+  const hs = others.map((p) => Math.abs((p[0] - a[0]) * up[0] + (p[1] - a[1]) * up[1]));
+  const h = hs.length ? hs.reduce((x, y) => x + y, 0) / hs.length : 0;
+  const compass = (Math.atan2(n[0], n[1]) * 180 / Math.PI + 360) % 360;   // 0 = Nord, 90 = Est
+  const az = ((compass - 180 + 540) % 360) - 180;                          // 0 = Sud, Est < 0
+  const corners = [a, b, [b[0] + up[0] * h, b[1] + up[1] * h], [a[0] + up[0] * h, a[1] + up[1] * h]];
+  return { az: Math.round(az * 10) / 10, len, h, corners: corners.map(rmLL) };
+}
+function rmTilt() { const v = parseFloat(($('#rmTilt').value || '').replace(',', '.')); return Number.isFinite(v) && v >= 0 && v < 89 ? v : null; }
+function rmRender(mouse) {
+  if (!rlayer) return;
+  rlayer.clearLayers();
+  const pts = RM.pts.slice(); const live = mouse && pts.length >= 2 && pts.length < 4 ? pts.concat([mouse]) : pts;
+  if (RM.prev) L.polygon(RM.prev, { color: '#ffffff', weight: 1.5, dashArray: '5 5', fill: false }).addTo(rlayer);
+  const r = rmCompute(live);
+  if (r && live.length >= 3) L.polygon(r.corners, { color: '#f2a20c', weight: 2.5, fillColor: '#f2a20c', fillOpacity: 0.25 }).addTo(rlayer);
+  else if (live.length >= 2 || (mouse && pts.length === 1)) L.polyline((mouse && pts.length === 1 ? pts.concat([mouse]) : live).slice(0, 2), { color: '#f2a20c', weight: 3 }).addTo(rlayer);
+  if (r && live.length >= 3) {   // flèche : direction de la face des modules (vers le bas de pente)
+    const a = rmXY(r.corners[0]), b = rmXY(r.corners[1]), c = rmXY(r.corners[3]);
+    const m0 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dn = [a[0] - c[0], a[1] - c[1]], k = Math.hypot(dn[0], dn[1]) || 1, l = Math.min(3, r.len / 4);
+    L.polyline([rmLL([m0[0] - dn[0] / k * 0.5, m0[1] - dn[1] / k * 0.5]), rmLL([m0[0] + dn[0] / k * l, m0[1] + dn[1] / k * l])], { color: '#4fc3f7', weight: 3 }).addTo(rlayer);
+  }
+  pts.forEach((p, k) => L.marker(p, { icon: L.divIcon({ className: 'rmpt', html: `<span>${k + 1}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }), interactive: false }).addTo(rlayer));
+  const t = rmTilt(), next = pts.length < 4 ? `Clic ${pts.length + 1}/4 : <b>${STEPS[pts.length]}</b>` : '<b>Relevé complet</b>';
+  let info = '';
+  if (r) {
+    info = `Orientation <b>${nf(r.az, 1)}°</b> · longueur <b>${nf(r.len, 2)} m</b>`;
+    if (live.length >= 3) info += ` · hauteur en plan ${nf(r.h, 2)} m → <b>${t != null ? nf(r.h / Math.cos(t * Math.PI / 180), 2) + ' m selon la pente' : 'inclinaison à renseigner'}</b>`;
+  }
+  $('#rmStep').innerHTML = next; $('#rmInfo').innerHTML = info || 'Zoomer à la molette, puis cliquer les angles de la zone de calepinage.';
+  $('#rmApply').disabled = RM.pts.length < 4 || t == null;
+}
+function ensureRoofModal() {
+  if ($('#roofModal')) return;
+  const m = document.createElement('div'); m.id = 'roofModal'; m.hidden = true;
+  m.innerHTML = `<div class="rmbox"><div class="rmhead"><b id="rmTitle">Relevé de toiture</b>
+      <label>Inclinaison <input type="number" id="rmTilt" step="any" min="0" max="89" style="width:70px"> °</label>
+      <button type="button" class="rmx" id="rmClose" title="Fermer">×</button></div>
+    <div class="rmbar"><span id="rmStep"></span><span id="rmInfo"></span></div>
+    <div id="rmMap"></div>
+    <div class="rmfoot"><button type="button" class="mini" id="rmUndo">Annuler le dernier point</button><button type="button" class="mini" id="rmReset">Recommencer</button>
+      <button type="button" class="mini" id="rmManual">Saisir à la main</button><span style="flex:1"></span>
+      <button type="button" class="primary" id="rmApply">Valider</button></div></div>`;
+  document.body.appendChild(m);
+  const ign = (layer, fmt, z) => L.tileLayer('https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=' + layer + '&STYLE=normal&TILEMATRIXSET=PM&FORMAT=' + fmt + '&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
+    { maxZoom: 22, maxNativeZoom: z, attribution: '© <a href="https://geoservices.ign.fr" target="_blank" rel="noopener">IGN – Géoplateforme</a>' });
+  rmap = L.map('rmMap', { doubleClickZoom: false, zoomSnap: 0.5, wheelPxPerZoomLevel: 90, maxZoom: 22 });
+  const ortho = ign('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg', 20).addTo(rmap);
+  L.control.layers({ 'Photographies aériennes IGN': ortho, 'Plan IGN': ign('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png', 19) }, null, { position: 'topright' }).addTo(rmap);
+  L.control.scale({ imperial: false }).addTo(rmap);
+  rlayer = L.layerGroup().addTo(rmap);
+  rmap.on('click', (e) => { if (RM && RM.pts.length < 4) { RM.pts.push(e.latlng); rmRender(); } });
+  rmap.on('mousemove', (e) => { if (RM && RM.pts.length && RM.pts.length < 4) rmRender(e.latlng); });
+  $('#rmUndo').onclick = () => { RM.pts.pop(); rmRender(); };
+  $('#rmReset').onclick = () => { RM.pts = []; rmRender(); };
+  $('#rmTilt').oninput = () => rmRender();
+  $('#rmApply').onclick = () => closeRoofMap(true);
+  $('#rmClose').onclick = () => closeRoofMap(RM && RM.pts.length === 4 && rmTilt() != null);
+  $('#rmManual').onclick = () => {
+    const f = S.cfg.structure.fields[RM.i]; RMANUAL.add(f.id); closeRoofMap(false);
+    const el = $(`[data-f="${RM_last},azimuth"]`); if (el) el.focus();
+    setStatus(`${f.name} : saisie manuelle de l'orientation et des dimensions (bouton « Vue aérienne » pour revenir au relevé).`, 'ok', 100);
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && RM) closeRoofMap(false); });
+}
+let RM_last = 0;
+function openRoofMap(i) {
+  const f = S.cfg.structure.fields[i];
+  if (S.cfg.site.lat == null || S.cfg.site.lon == null) { setStatus('Renseigner d\'abord les coordonnées du site (section Site) pour ouvrir la vue aérienne.', 'err', 100); return; }
+  ensureRoofModal();
+  RM_last = i;
+  RM = { i, pts: [], o: { lat: S.cfg.site.lat, lng: S.cfg.site.lon }, prev: f.geom ? f.geom.map((p) => L.latLng(p[0], p[1])) : null };
+  $('#rmTitle').textContent = `Relevé de toiture – ${f.name || 'Champ ' + (i + 1)}`;
+  $('#rmTilt').value = f.tilt ?? '';
+  $('#roofModal').hidden = false;
+  setTimeout(() => {
+    rmap.invalidateSize();
+    if (RM.prev) rmap.fitBounds(L.latLngBounds(RM.prev).pad(1.5), { maxZoom: 21 }); else rmap.setView([RM.o.lat, RM.o.lng], 19);
+    rmRender();
+  }, 30);
+}
+function closeRoofMap(apply) {
+  if (!RM) return;
+  if (apply) {
+    const r = rmCompute(RM.pts), t = rmTilt(), f = S.cfg.structure.fields[RM.i];
+    f.tilt = t; f.azimuth = r.az; f.length = Math.round(r.len * 100) / 100;
+    f.height = Math.round(r.h / Math.cos(t * Math.PI / 180) * 100) / 100;
+    f.geom = r.corners.map((p) => [+p.lat.toFixed(7), +p.lng.toFixed(7)]);
+    setStatus(`${f.name} : orientation ${nf(f.azimuth, 1)}°, zone ${nf(f.length, 2)} × ${nf(f.height, 2)} m (selon la pente, inclinaison ${nf(t, 1)}°).`, 'ok', 100);
+    renderRoof(); onChange('structure.fields');
+  }
+  $('#roofModal').hidden = true; RM = null;
 }
 // bibliothèque de modules / onduleurs supplémentaires (toiture)
 async function addLib(kind, file) {
