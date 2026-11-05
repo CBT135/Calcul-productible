@@ -7,7 +7,8 @@
 const DEFAULTS = {
   project: { name: '', variant: 'Var0', author: '' },
   site: { lat: null, lon: null, alt: null, albedo: 0.20 },
-  meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: false },
+  meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: true },
+  module: { lowlight_cal: true },
   horizon: { use: true },
   structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'sud0', pitch: null, width: null, height: null, n_rows: null,
     n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
@@ -160,6 +161,7 @@ function buildForm() {
       `<div class="fld full groups" data-show="structure.type==roof"><label>Autres modules<i>affectables aux champs</i></label><div id="lib-pan"></div>
         <label class="mini filebtn">+ Ajouter un module (.PAN)<input type="file" accept=".pan,.PAN,.htm,.html,.txt" hidden data-lib="pan"></label></div>` +
       num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
+      chk('module.lowlight_cal', 'Caler le rendement en faible éclairement sur le .PAN', { hint: 'Le modèle à une diode est corrigé pour reproduire les rendements relatifs déclarés dans le .PAN (points à 25 °C : 800, 600, 400, 200 W/m²…).' }) +
       `<div class="fld"><label>Puissance DC</label><input type="text" id="pdcOut" readonly></div>`),
     section('inverter', 'Onduleurs', drop('ond', '<span>Fichier .OND (format texte)</span>') +
       `<div class="fld full groups" data-show="structure.type==roof"><label>Autres onduleurs<i>affectables aux champs</i></label><div id="lib-ond"></div>
@@ -915,6 +917,7 @@ function renderHyp() {
     ['Module', `${esc(pan.manufacturer)} ${esc(pan.model)}`], ['Puissance / technologie', `${nf(pan.pnom)} Wc · ${esc(pan.technol)} · ${pan.ns} cellules série${pan.half_cells ? ' · demi-cellules' : ''}`],
     ['Vmp / Imp / Voc / Isc', `${nf(pan.vmp, 2)} V / ${nf(pan.imp, 2)} A / ${nf(pan.voc, 2)} V / ${nf(pan.isc, 2)} A`],
     ['Modèle une diode', `Rs ${nf(pan.rs, 3)} Ω · Rsh ${nf(pan.rsh)} Ω · Rsh(0) ${nf(pan.rsh0)} Ω · γ ${nf(pan.gamma, 3)} · μγ ${pan.mu_gamma}`],
+    ['Faible éclairement', c.module && c.module.lowlight_cal === false ? 'modèle à une diode non calé' : (pan.lowlight && pan.lowlight.length > 1 ? 'calé sur le .PAN : ' + pan.lowlight.filter(([g]) => g !== 1000).map(([g, v]) => `${nf(g, 0)} W/m² ${v > 0 ? '+' : ''}${nf(v, 2)} %`).join(' · ') : 'aucun point déclaré dans le .PAN (modèle non calé)')],
     ['Coefficients T°', `μIsc ${nf(pan.mu_isc * 1000, 2)} mA/°C · μVoc ${nf(pan.mu_voc, 1)} mV/°C`],
     ['Champ', r.fields ? `${nf(s.n_modules)} modules sur ${r.fields.length} toit(s) · ${nf(s.pnom_kwc, 2)} kWc (détail par champ dans la synthèse)` : `${nf(s.n_modules)} modules · ${c.array.n_series} en série × ${c.array.n_strings} chaînes · ${nf(s.pnom_kwc, 1)} kWc`],
     ['Bifacialité retenue', s.bifaciality ? nf(s.bifaciality, 2) : 'non'],

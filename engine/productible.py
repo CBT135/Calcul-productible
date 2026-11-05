@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.3.0"
+ENGINE_VERSION = "1.4.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -77,6 +77,20 @@ def parse_pan(text):
         pts = [(float(a), float(b)) for a, b in
                re.findall(r'Point_\d+=\s*([\d.]+)\s*,\s*([\d.]+)', blk.group(1))]
     pan['iam_profile'] = pts
+    # rendements relatifs en faible éclairement déclarés dans le .PAN (points de fonctionnement à 25 °C)
+    ll = {}
+    blk = re.search(r'OperPoints, list of=.*?End of List OperPoints', text, re.S)
+    if blk:
+        for m in re.finditer(r'Point_\d+=\s*(True|False)\s*,\s*([\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)', blk.group(0)):
+            g, t, rel = float(m.group(2)), float(m.group(3)), float(m.group(4))
+            if abs(t - 25) < 0.5 and g > 0:
+                ll[g] = rel
+    for g in (800, 600, 400, 200):
+        v = _f(kv, f'RelEffic{g}')
+        if v is not None and float(g) not in ll:
+            ll[float(g)] = v
+    ll.setdefault(1000.0, 0.0)
+    pan['lowlight'] = sorted(ll.items()) if len(ll) > 1 else []
     # paramètres une diode IL_ref, I0_ref (méthode PVsyst : Isc et Voc imposés)
     nV = pan['gamma'] * pan['ns'] * K_B * 298.15 / Q_E
 
@@ -90,6 +104,22 @@ def parse_pan(text):
     il, ln_i0 = fsolve(eqs, [pan['isc'], math.log(1e-11)])
     pan['IL_ref'], pan['I0_ref'] = float(il), float(math.exp(ln_i0))
     return pan
+
+
+def lowlight_factor(pan):
+    """Calage du modèle sur les rendements relatifs du .PAN : facteur(G) = (1 + rel_PAN) / (1 + rel_modèle),
+    interpolé en irradiance (1 à 1000 W/m²), constant hors de la plage des points déclarés."""
+    pts = pan.get('lowlight') or []
+    if len(pts) < 2:
+        return None
+    G = np.array([g for g, _ in pts], float)
+    rel_pan = np.array([r for _, r in pts], float) / 100
+    pm, _, _, _ = module_point(pan, G, 25.0)
+    pm_ref = module_point(pan, np.array([1000.0]), 25.0)[0][0]
+    rel_mod = pm / G / (pm_ref / 1000) - 1
+    fac = (1 + rel_pan) / (1 + rel_mod)
+    pan['lowlight_model'] = [[float(g), round(100 * r, 3)] for g, r in zip(G, rel_mod)]
+    return lambda g: np.interp(np.asarray(g, float), G, fac)
 
 
 def module_point(pan, g, t):
@@ -722,7 +752,8 @@ def check_design(pan, ond, cfg):
 DEFAULTS = dict(
     project=dict(name='Projet', variant='Var0', author=''),
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
-    meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=False),
+    meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=True),
+    module=dict(lowlight_cal=True),
     horizon=dict(use=True),
     structure=dict(fields=[], type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
@@ -849,10 +880,14 @@ def _simulate_one(cfg_in, files):
         mask = g_eff > 1
         gp = g_eff.clip(lower=0.1)
         pm, im, vm, _ = module_point(pan, gp.values, t_cell.values)
+        llf = lowlight_factor(pan) if cfg['module'].get('lowlight_cal', True) else None
+        ll_fac = llf(gp.values) if llf else 1.0
+        pm = pm * ll_fac
         p_mod = pd.Series(pm, index=w.index).clip(lower=0).where(mask, 0)
         i_mod = pd.Series(im, index=w.index).where(mask, 0)
         v_mod = pd.Series(vm, index=w.index).where(mask, 0)
         pm25, _, _, _ = module_point(pan, gp.values, np.full(len(gp), 25.0))
+        pm25 = pm25 * ll_fac
         p_mod25 = pd.Series(pm25, index=w.index).clip(lower=0).where(mask, 0)
         nm = n_mod * share
         p_nom_stc = g_eff / 1000 * pnom * share

@@ -54,6 +54,7 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 - **Face arrière** : pvlib *infinite sheds* (Hay-Davies), avec ombrage arrière, mismatch arrière et fraction transparente.
 - **IAM** : Fresnel avec couche antireflet, ou profil utilisateur du `.PAN`.
 - **Module** : modèle à une diode (`pvlib.pvsystem.calcparams_pvsyst`). Les paramètres Rs, Rsh(G), γ, μγ et μIsc sont lus dans le `.PAN`. IL et I0 sont calculés à partir d'Isc et de Voc.
+- **Faible éclairement** : le modèle à une diode est calé sur les rendements relatifs déclarés dans le `.PAN`, c'est-à-dire les points de fonctionnement à 25 °C (1100, 800, 600, 400, 200, 100 W/m²) ou les champs `RelEffic`. La puissance est multipliée par (1 + rendement relatif du .PAN) / (1 + rendement relatif du modèle), interpolé selon l'irradiance. Ce calage est actif par défaut et peut être désactivé dans la section Modules.
 - **Thermique** : bilan thermique Uc / Uv (absorption du `.PAN`).
 - **Pertes DC** : LID, qualité, mismatch des modules et des chaînes, pertes ohmiques proportionnelles au courant.
 - **Onduleurs** : courbes Pin→Pout du `.OND` aux trois tensions, interpolées sur la tension MPP du champ. Sont aussi pris en compte : le seuil de démarrage, la sortie de plage MPPT basse, et la Pmax déclassée selon la température ambiante + **offset** (TPMax → TPNom → TPLim1 → TPLimAbs).
