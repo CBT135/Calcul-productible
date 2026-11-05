@@ -9,10 +9,10 @@ const DEFAULTS = {
   site: { lat: null, lon: null, alt: null, albedo: 0.20 },
   meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: false },
   horizon: { use: true },
-  structure: { type: 'fixed', tilt: null, azimuth: 180, pitch: null, width: null, height: null, n_rows: null,
+  structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'pvsyst', pitch: null, width: null, height: null, n_rows: null,
     n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
     shading_configs: [{ sub_in_height: null, share: 100 }],
-    axis_azimuth: 180, max_angle: 55, backtrack: true, axis_height: 1.5 },
+    axis_azimuth: 0, max_angle: 55, backtrack: true, axis_height: 1.5 },
   array: { n_series: null, n_strings: 0 },
   inverters: { groups: [[null, null]], t_offset: 0, p_inj_kw: null },
   bifacial: { enabled: true, bifaciality: null, albedo_ground: 0.17, rear_shading: 5, rear_mismatch: 10, transparent: 0 },
@@ -138,7 +138,9 @@ function buildForm() {
         <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="tracker">Tracker mono-axe</button><button type="button" data-v="ew">Est-Ouest</button></div></div>` +
       num('structure.tilt', 'Inclinaison', '°', { show: 'structure.type!=tracker' }) +
       num('structure.azimuth', 'Azimut (PVsyst)', '°', { show: st('fixed'), hint: '0 = Sud, Est &lt; 0, Ouest &gt; 0.', title: 'Convention PVsyst' }) +
-      num('structure.axis_azimuth', "Azimut de l'axe", '°', { show: st('tracker'), hint: '180 = axe Nord-Sud.' }) +
+      `<div class="fld" data-show="structure.type==ew"><label>Orientation du faîtage (PVsyst)<i>°</i></label><input type="number" step="any" data-path="structure.azimuth" title="Convention PVsyst">
+        <div class="hint" id="ewHint">0 = Sud : pan Est à −90°, pan Ouest à +90°.</div></div>` +
+      num('structure.axis_azimuth', "Azimut de l'axe (PVsyst)", '°', { show: st('tracker'), hint: '0 = axe Nord-Sud (rotation Est-Ouest).' }) +
       num('structure.max_angle', 'Rotation maximale', '±°', { show: st('tracker') }) +
       chk('structure.backtrack', 'Backtracking', { show: st('tracker') }) +
       num('structure.pitch', 'Entraxe des rangées', 'm', { hint: 'Est-Ouest : distance entre faîtages.' }) +
@@ -182,7 +184,7 @@ function buildForm() {
       set(S.cfg, p, v); onChange(p);
     });
   });
-  $$('#stype button').forEach((b) => b.addEventListener('click', () => { set(S.cfg, 'structure.type', b.dataset.v); onChange('structure.type'); }));
+  $$('#stype button').forEach((b) => b.addEventListener('click', () => { set(S.cfg, 'structure.type', b.dataset.v); fillForm(); onChange('structure.type'); }));
   $$('[data-drop]').forEach(bindDrop);
   $('#addGroup').addEventListener('click', () => { S.cfg.inverters.groups.push([null, null]); renderGroups(); onChange('inverters.groups'); });
   $('#addShconf').addEventListener('click', () => {
@@ -410,6 +412,10 @@ function syncStrings() {
   S.cfg.array.n_strings = S.cfg.inverters.groups.reduce((a, g) => a + (g[0] || 0) * (g[1] || 0), 0);
   const el = $('[data-path="array.n_strings"]'); if (el) el.value = S.cfg.array.n_strings;
 }
+function ewFaces(o) {
+  const n = (a) => ((((a + 180) % 360) + 360) % 360) - 180, f = (a) => (a > 0 ? '+' : a < 0 ? '−' : '') + nf(Math.abs(a), 0) + '°';
+  const v = Number(o) || 0; return `pan Est ${f(n(v - 90))}, pan Ouest ${f(n(v + 90))}`;
+}
 function renderDerived() {
   const c = S.cfg, pan = S.info.pan && !S.info.pan.error ? S.info.pan : null;
   const nmod = c.array.n_series * c.array.n_strings;
@@ -421,6 +427,7 @@ function renderDerived() {
     la = ` · angle limite ${nf(Math.atan(Math.sin(t) / (r - Math.cos(t))) * 180 / Math.PI, 1)}°`;
   }
   $('#gcrOut').value = `GCR ${pf(gcr, 1)}${la}`;
+  const eh = $('#ewHint'); if (eh) eh.textContent = `0 = Sud. Ici : ${ewFaces(c.structure.azimuth)} (PVsyst).`;
   if (S.check && S.check.sub_in_height) $$('#shconfs [data-sh$=",sub_in_height"]').forEach((el) => (el.placeholder = `auto (${S.check.sub_in_height})`));
   // résumés des sections
   const ond = S.info.ond && !S.info.ond.error ? S.info.ond : null;
@@ -432,7 +439,7 @@ function renderDerived() {
     horizon: S.files.horizon ? (c.horizon.use ? 'appliqué' : 'désactivé') : 'aucun',
     module: !(c.array.n_series > 0) ? 'à renseigner' : pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
     inverter: !(ninv > 0) ? 'à renseigner' : ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
-    structure: { fixed: `Sheds ${c.structure.tilt ?? '–'}° / ${c.structure.azimuth ?? '–'}°`, tracker: `Tracker ±${c.structure.max_angle ?? '–'}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt ?? '–'}°` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
+    structure: { fixed: `Sheds ${c.structure.tilt ?? '–'}° / ${c.structure.azimuth ?? '–'}°`, tracker: `Tracker ±${c.structure.max_angle ?? '–'}°${c.structure.backtrack ? ' backtracking' : ''}`, ew: `Est-Ouest ${c.structure.tilt ?? '–'}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(gcr, 0)}`,
     shading: `${c.structure.elec_effect} % · ` + c.structure.shading_configs.map((x) => `${x.sub_in_height || (S.check ? S.check.sub_in_height : 'auto')} (${nf(x.share, 2)} %)`).join(' + '),
     bifacial: c.bifacial.enabled ? `albédo ${c.bifacial.albedo_ground}` : 'non',
     thermal: `Uc ${c.thermal.uc} · ${c.iam.mode === 'pan' ? 'IAM .PAN' : 'Fresnel'}`,
@@ -633,7 +640,7 @@ function renderHyp() {
     ['Groupes', c.inverters.groups.map(([a, b]) => `${a} × ${b} chaînes`).join(' + ') + ` · DC/AC ${nf(s.dc_ac, 2)}`],
     ['Plage MPPT / Vmax / Imax DC', `${nf(ond.vmin)}–${nf(ond.vmax)} V · ${nf(ond.vabsmax)} V · ${nf(ond.imax_dc)} A`],
     ['Tension MPP moyenne', `${nf(s.vmpp_mean)} V`]])}</div><div>${kv([
-    ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}°, ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°` }[c.structure.type]],
+    ['Structure', { fixed: `Sheds fixes ${c.structure.tilt}° / azimut ${c.structure.azimuth}°`, tracker: `Tracker mono-axe, axe ${c.structure.axis_azimuth}° (PVsyst), ±${c.structure.max_angle}°, ${c.structure.backtrack ? 'avec' : 'sans'} backtracking`, ew: `Est-Ouest ${c.structure.tilt}°, faîtage ${c.structure.azimuth}° (PVsyst) : ${ewFaces(c.structure.azimuth)}` }[c.structure.type]],
     ['Géométrie', `entraxe ${c.structure.pitch} m · largeur ${c.structure.width} m · GCR ${pf(s.gcr, 1)}${s.limit_angle != null ? ` · angle limite ${nf(s.limit_angle, 1)}°` : ''} · ${c.structure.n_rows} rangées`],
     ['Ombrage électrique', `${c.structure.elec_effect} % · ` + (r.shading_configs || []).map((x) => `${x.sub_in_height} sous-chaînes en hauteur sur ${nf(x.share, 2)} % des tables`).join(' + ')],
     ['Ombrage proche du diffus', r.faces.map((f) => `${f.name} ${pf(f.diffuse_attenuation, 1)}`).join(', ')],
@@ -707,7 +714,7 @@ $('#expPdf').addEventListener('click', () => {
   const html = `<h1>${esc(c.project.name)} – ${esc(c.project.variant)}</h1>
     <div class="sub">Rapport de simulation de productible · ${new Date().toLocaleDateString('fr-FR')}${c.project.author ? ' · ' + esc(c.project.author) : ''} · moteur v${r.engine}, pvlib ${r.pvlib}</div>
     <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50)</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
-    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}°` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
+    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
     <div>${kv([['Modules', `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
     <h2>Vérifications de dimensionnement</h2><table><tr><th>Vérification</th><th>Statut</th><th>Détail</th></tr>${r.alerts.map((a) => `<tr><td>${esc(a.title)}</td><td>${{ ok: 'OK', warn: 'Alerte', block: 'Bloquant' }[a.level]}</td><td>${esc(a.message)}</td></tr>`).join('')}</table>
     <h2>Résultats mensuels</h2>${img('chMonthly')}
@@ -730,6 +737,12 @@ $('#expPdf').addEventListener('click', () => {
 function migrate(raw) {
   const cfg = deepMerge(DEFAULTS, raw || {});
   const rs = (raw && raw.structure) || {};
+  if (raw && raw.structure && !rs.az_convention) {
+    const conv = (a) => (a == null ? a : ((((Number(a) - 180) % 360) + 540) % 360) - 180);
+    cfg.structure.azimuth = rs.type === 'ew' ? 0 : conv(rs.azimuth ?? 180);
+    cfg.structure.axis_azimuth = conv(rs.axis_azimuth ?? 180);
+    cfg.structure.az_convention = 'pvsyst';
+  }
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;
 }

@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "1.2.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -519,10 +519,10 @@ DEFAULTS = dict(
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
     meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=False),
     horizon=dict(use=True),
-    structure=dict(type='fixed', tilt=16.0, azimuth=180.0, pitch=9.01, width=7.19, height=0.80,
+    structure=dict(type='fixed', tilt=16.0, azimuth=0.0, az_convention='pvsyst', pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
                    shading_configs=[dict(sub_in_height=None, share=100.0)],
-                   axis_azimuth=180.0, max_angle=55.0, backtrack=True, axis_height=1.5),
+                   axis_azimuth=0.0, max_angle=55.0, backtrack=True, axis_height=1.5),
     array=dict(n_series=27, n_strings=128),
     inverters=dict(groups=[[4, 21], [2, 22]], t_offset=0.0, p_inj_kw=None),
     bifacial=dict(enabled=True, bifaciality=None, albedo_ground=0.17, rear_shading=5.0,
@@ -592,14 +592,23 @@ def _simulate_one(cfg_in, files):
 
     st = cfg['structure']
     stype = st['type']
+    # Azimuts saisis en convention PVsyst (0 = Sud, Est < 0, Ouest > 0) ; pvlib : 180 = Sud.
+    # 'az_convention': 'pvlib' conserve l'ancienne saisie (180 = Sud) pour les appels Python existants.
+    to_pvlib = (lambda a: (float(a) + 180.0) % 360) if st.get('az_convention', 'pvsyst') == 'pvsyst' \
+        else (lambda a: float(a) % 360)
     if stype == 'tracker':
-        faces = [dict(kind='tracker', share=1.0, axis_azimuth=float(st['axis_azimuth']),
+        # axe : PVsyst 0 = axe Nord-Sud (rotation vers l'Est le matin) -> pvlib axis_azimuth 180
+        faces = [dict(kind='tracker', share=1.0, axis_azimuth=to_pvlib(st['axis_azimuth']),
                       max_angle=float(st['max_angle']), backtrack=bool(st['backtrack']), name='Tracker')]
     elif stype == 'ew':
-        faces = [dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=90.0, name='Est'),
-                 dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=270.0, name='Ouest')]
+        # orientation du faîtage : 0 (Sud) -> pan Est à -90° et pan Ouest à +90° (PVsyst)
+        o = float(st.get('azimuth') or 0.0) if st.get('az_convention', 'pvsyst') == 'pvsyst' else float(st.get('azimuth', 180.0)) - 180.0
+        faces = [dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o - 90.0 + 180.0) % 360,
+                      azimuth_pvsyst=((o - 90.0 + 180.0) % 360) - 180.0, name='Est'),
+                 dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o + 90.0 + 180.0) % 360,
+                      azimuth_pvsyst=((o + 90.0 + 180.0) % 360) - 180.0, name='Ouest')]
     else:
-        faces = [dict(kind='fixed', share=1.0, tilt=float(st['tilt']), azimuth=float(st['azimuth']),
+        faces = [dict(kind='fixed', share=1.0, tilt=float(st['tilt']), azimuth=to_pvlib(st['azimuth']),
                       name='Fixe')]
     bif = cfg['bifacial']
     bifaciality = float(bif['bifaciality']) if bif.get('bifaciality') not in (None, '') else (
@@ -664,6 +673,8 @@ def _simulate_one(cfg_in, files):
             acc(k, s, 1.0)
         acc('t_cell_w', t_cell * p5, 1.0)
         face_info.append(dict(name=face['name'], share=share,
+                              azimuth_pvsyst=round((face.get('azimuth', 180.0) % 360) - 180.0, 1)
+                              if face['kind'] == 'fixed' else None,
                               diffuse_attenuation=round(fi['diff_att'], 4),
                               horizon_diffuse_factor=round(fi['f_hz'], 4)))
     v_arr = (v_w / p_dc.where(p_dc > 0)).fillna(0)

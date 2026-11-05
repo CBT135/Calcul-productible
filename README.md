@@ -10,7 +10,12 @@ Application web d'estimation de productible photovoltaïque, de type PVsyst, qui
 2. **Météo** : déposer le TMY PVGIS 5.3 (CSV ou JSON), de préférence **sans horizon** (`usehorizon=0`), le masque étant appliqué par l'application. Déposer ou coller le JSON Global Solar Atlas pour recaler le TMY (mensuel ou annuel).
 3. **Masque lointain** (optionnel) : CSV PVsyst (`Azimut;Hauteur`, 0 = Sud, Est négatif) ou fichier horizon PVGIS.
 4. **Modules et onduleurs** : déposer les fichiers PVsyst `.PAN` et `.OND`, puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
-5. **Structure** : sheds fixes, tracker mono-axe (avec ou sans backtracking) ou Est-Ouest ; ombrage électrique « selon les chaînes ».
+5. **Structure** : sheds fixes, tracker mono-axe (avec ou sans backtracking) ou Est-Ouest ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en **convention PVsyst** (0 = Sud, Est négatif, Ouest positif) :
+   - **sheds** : azimut des modules ;
+   - **tracker** : azimut de l'axe, 0 = axe Nord-Sud ;
+   - **Est-Ouest** : orientation du faîtage. 0 = Sud, ce qui donne un pan Est à −90° et un pan Ouest à +90°. Une orientation de 20° donne −70° et +110°.
+
+   Les projets enregistrés avant cette convention, où 180 valait Sud, sont convertis automatiquement à l'ouverture.
 6. **Pertes, bifacial, thermique, P50/P90** : valeurs standard proposées, toutes modifiables. Un nouveau projet part de champs vides pour tout ce qui est propre au site (coordonnées, géométrie, câblage, transformateur) ; la simulation reste bloquée tant qu'ils ne sont pas renseignés.
 7. **Lancer la simulation**, puis exporter : classeur Excel complet, rapport PDF, série horaire CSV, projet JSON (rouvrable avec toutes les saisies et tous les fichiers).
 
