@@ -759,7 +759,7 @@ def merge(base, over):
 
 
 def default_sub_in_height(st, pan):
-    n_high = int(st.get('n_high', 1))
+    n_high = int(st.get('n_high') or 1)
     if st.get('orientation', 'portrait') == 'landscape':
         return n_high * max(pan.get('ndiode', 3), 1)
     return n_high * (2 if pan.get('half_cells') else 1)
