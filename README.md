@@ -46,7 +46,7 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 
 ## Méthode de calcul (pas horaire)
 
-- **Météo** : TMY PVGIS 5.3 (SARAH-3), recalage optionnel sur Global Solar Atlas. Le diffus et le direct sont multipliés séparément, mois par mois ou sur l'année. Le GHI est recomposé (DIF + DNI × cos z). Le DNI est plafonné à 1,05 × le ciel clair, avec redistribution de l'énergie écrêtée pour conserver les cumuls.
+- **Météo** : TMY PVGIS 5.3 (SARAH-3), recalage optionnel sur Global Solar Atlas. Le diffus est multiplié mois par mois (ou sur l'année). Le direct est ajusté sur l'indice de clarté kb = DNI / DNI ciel clair, transformé en kb^g : les heures claires restent claires et les heures couvertes restent couvertes, seules les heures intermédiaires s'éclaircissent ou s'assombrissent. Une simple multiplication du direct gonflait les heures déjà claires jusqu'au plafond de ciel clair et surestimait l'écrêtage onduleur. Le GHI est recomposé (DIF + DNI × cos z). Le DNI est plafonné à 1,05 × le ciel clair, avec redistribution de l'énergie écrêtée pour conserver les cumuls.
 - **Masque lointain** : le direct est coupé sous la ligne d'horizon. Le diffus isotrope et la bande d'horizon sont réduits d'un facteur intégré sur la voûte céleste vue par le plan.
 - **Transposition** : Perez (isotrope, circumsolaire et bande d'horizon séparés).
 - **Ombrages proches** : modèle 1D de rangées infinies (`shaded_fraction1d`), première rangée non ombrée, perte de vue du ciel pour le diffus.

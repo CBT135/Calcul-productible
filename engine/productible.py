@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.5.1"
+ENGINE_VERSION = "1.5.2"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -292,6 +292,31 @@ def parse_pvgis_monthly(text):
 # ======================================================================================
 # 2. Météo : recalage Global Solar Atlas
 # ======================================================================================
+def _shift_clearness(n, cs, c, target):
+    """Ajuste le direct d'un mois sans déformer les extrêmes : l'indice de clarté kb = DNI / DNI ciel clair
+    devient kb**g (g solvé par dichotomie). Les heures claires (kb ≈ 1) et couvertes (kb ≈ 0) restent
+    claires ou couvertes ; ce sont les heures intermédiaires qui s'éclaircissent ou s'assombrissent."""
+    ok = cs > 1
+    kb = (n / cs.where(ok, 1)).where(ok, 0)
+    hi = kb > 1                       # au-delà du ciel clair simplifié : inchangé
+    base = (n * c)[hi].sum()
+    k = kb.clip(0, 1)
+
+    def tot(g):
+        return base + (cs * k ** g * c)[~hi].sum()
+    lo_g, hi_g = 0.02, 50.0
+    if not (tot(hi_g) <= target <= tot(lo_g)):
+        return n * target / max((n * c).sum(), 1e-9)
+    for _ in range(60):
+        g = math.sqrt(lo_g * hi_g)
+        if tot(g) > target:
+            lo_g = g
+        else:
+            hi_g = g
+    g = math.sqrt(lo_g * hi_g)
+    return n.where(hi, cs * k ** g)
+
+
 def gsa_correct(w, sp, cz, gsa, mode='monthly', align_temp=False):
     """Recale le TMY sur Global Solar Atlas. mode : 'monthly' (12 mois) ou 'annual' (facteurs uniques)."""
     month = w.index.month
@@ -323,9 +348,9 @@ def gsa_correct(w, sp, cz, gsa, mode='monthly', align_temp=False):
             if d_m.sum() > 0:
                 d_m = d_m * d_t / d_m.sum()
             b_m = (n_m * c_m).sum()
-            if b_m > 0:
-                n_m = n_m * b_t / b_m
             lim = 1.05 * cs_dni[sel]
+            if b_m > 0 and abs(b_t - b_m) > 1e-6 * b_m:
+                n_m = _shift_clearness(n_m, cs_dni[sel], c_m, b_t)
             n_clip = max(n_clip, int((n_m > lim + 1).sum()))
             n_m = np.minimum(n_m, lim)
             over = (d_m + n_m * c_m - 1.10 * cs_ghi[sel]).clip(lower=0)
