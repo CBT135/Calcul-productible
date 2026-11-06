@@ -8,7 +8,7 @@ const DEFAULTS = {
   project: { name: '', variant: 'Var0', author: '' },
   site: { lat: null, lon: null, alt: null, albedo: 0.20 },
   meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: true },
-  module: { lowlight_cal: true },
+  module: { lowlight_cal: 'auto' },
   horizon: { use: true },
   structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'sud0', pitch: null, width: null, height: null, n_rows: null,
     n_high: null, orientation: 'portrait', sub_in_height: null, elec_effect: 80,
@@ -161,7 +161,7 @@ function buildForm() {
       `<div class="fld full groups" data-show="structure.type==roof"><label>Autres modules<i>affectables aux champs</i></label><div id="lib-pan"></div>
         <label class="mini filebtn">+ Ajouter un module (.PAN)<input type="file" accept=".pan,.PAN,.htm,.html,.txt" hidden data-lib="pan"></label></div>` +
       num('bifacial.bifaciality', 'Facteur de bifacialité', '', { step: 0.01, ph: 'valeur du .PAN', hint: 'Vide = valeur du .PAN.' }) +
-      chk('module.lowlight_cal', 'Caler le rendement en faible éclairement sur le .PAN', { hint: 'Le modèle à une diode est corrigé pour reproduire les rendements relatifs déclarés dans le .PAN (points à 25 °C : 800, 600, 400, 200 W/m²…).' }) +
+      sel('module.lowlight_cal', 'Calage du rendement en faible éclairement', [['auto', 'Automatique (si le .PAN contient des mesures)'], ['force', 'Toujours caler sur le .PAN'], ['off', 'Jamais (modèle à une diode brut)']], { full: true, hint: 'En automatique, le modèle à une diode est corrigé pour reproduire les rendements relatifs du .PAN seulement si celui-ci contient un jeu de mesures (point de référence marqué « True », ex. fichiers de laboratoire). Sinon, les points déclarés sont souvent recalculés à partir du modèle et le calage n\'apporte rien.' }) +
       `<div class="fld"><label>Puissance DC</label><input type="text" id="pdcOut" readonly></div>`),
     section('inverter', 'Onduleurs', drop('ond', '<span>Fichier .OND (format texte)</span>') +
       `<div class="fld full groups" data-show="structure.type==roof"><label>Autres onduleurs<i>affectables aux champs</i></label><div id="lib-ond"></div>
@@ -938,7 +938,13 @@ function renderHyp() {
     ['Module', `${esc(pan.manufacturer)} ${esc(pan.model)}`], ['Puissance / technologie', `${nf(pan.pnom)} Wc · ${esc(pan.technol)} · ${pan.ns} cellules série${pan.half_cells ? ' · demi-cellules' : ''}`],
     ['Vmp / Imp / Voc / Isc', `${nf(pan.vmp, 2)} V / ${nf(pan.imp, 2)} A / ${nf(pan.voc, 2)} V / ${nf(pan.isc, 2)} A`],
     ['Modèle une diode', `Rs ${nf(pan.rs, 3)} Ω · Rsh ${nf(pan.rsh)} Ω · Rsh(0) ${nf(pan.rsh0)} Ω · γ ${nf(pan.gamma, 3)} · μγ ${pan.mu_gamma}`],
-    ['Faible éclairement', c.module && c.module.lowlight_cal === false ? 'modèle à une diode non calé' : (pan.lowlight && pan.lowlight.length > 1 ? 'calé sur le .PAN : ' + pan.lowlight.filter(([g]) => g !== 1000).map(([g, v]) => `${nf(g, 0)} W/m² ${v > 0 ? '+' : ''}${nf(v, 2)} %`).join(' · ') : 'aucun point déclaré dans le .PAN (modèle non calé)')],
+    ['Faible éclairement', (() => {
+      const m = c.module && c.module.lowlight_cal, pts = pan.lowlight && pan.lowlight.length > 1;
+      const applied = pan.lowlight_applied ?? (pts && (m === 'force' || (m !== 'off' && m !== false && pan.lowlight_measured)));
+      if (applied) return 'calé sur le .PAN' + (m === 'force' ? ' (forcé)' : ' (mesures)') + ' : ' + pan.lowlight.filter(([g]) => g !== 1000).map(([g, v]) => `${nf(g, 0)} W/m² ${v > 0 ? '+' : ''}${nf(v, 2)} %`).join(' · ');
+      if (m === 'off' || m === false) return 'modèle à une diode non calé (désactivé)';
+      return pts ? 'modèle à une diode non calé (.PAN sans jeu de mesures)' : 'modèle à une diode non calé (aucun point dans le .PAN)';
+    })()],
     ['Coefficients T°', `μIsc ${nf(pan.mu_isc * 1000, 2)} mA/°C · μVoc ${nf(pan.mu_voc, 1)} mV/°C`],
     ['Champ', r.fields ? `${nf(s.n_modules)} modules sur ${r.fields.length} toit(s) · ${nf(s.pnom_kwc, 2)} kWc (détail par champ dans la synthèse)` : `${nf(s.n_modules)} modules · ${c.array.n_series} en série × ${c.array.n_strings} chaînes · ${nf(s.pnom_kwc, 1)} kWc`],
     ['Bifacialité retenue', s.bifaciality ? nf(s.bifaciality, 2) : 'non'],
@@ -1140,6 +1146,8 @@ function migrate(raw) {
     cfg.structure.axis_azimuth = conv(rs.axis_azimuth ?? 180);
     cfg.structure.az_convention = 'sud0';
   }
+  const ll = raw && raw.module && raw.module.lowlight_cal;
+  if (ll === true || ll === undefined) cfg.module.lowlight_cal = 'auto'; else if (ll === false) cfg.module.lowlight_cal = 'off';
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;
 }

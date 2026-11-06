@@ -51,10 +51,19 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 - **Transposition** : Perez (isotrope, circumsolaire et bande d'horizon séparés).
 - **Ombrages proches** : modèle 1D de rangées infinies (`shaded_fraction1d`), première rangée non ombrée, perte de vue du ciel pour le diffus.
 - **Ombrage électrique** « selon les chaînes », avec une ou plusieurs configurations (sous-chaînes en hauteur × part des tables, total 100 %). Une étude complète est calculée par configuration, puis toutes les grandeurs sont moyennées au prorata des tables. Fraction de l'effet électrique paramétrable ; les chaînes suivent les rangées. En mode « auto », on compte 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, et 3 par module paysage.
-- **Face arrière** : pvlib *infinite sheds* (Hay-Davies), avec ombrage arrière, mismatch arrière et fraction transparente.
+- **Face arrière** : modèle 2D de rangées infinies à **sol non uniforme**, pour toutes les structures (sheds, Est-Ouest, tracker) :
+  - le sol entre deux rangées est découpé en 40 bandes, éclairées ou à l'ombre heure par heure selon la position du soleil (la fraction transparente laisse passer une part du direct) ;
+  - chaque bande reçoit le direct si elle est au soleil, plus le diffus du ciel pondéré par sa vue du ciel ;
+  - la face arrière voit chaque bande et le ciel selon des facteurs de vue calculés par lancer de rayons, avec 12 rangées de part et d'autre ; pour un tracker, les facteurs sont tabulés tous les 2° d'angle de rotation ;
+  - sont appliqués ensuite l'albédo, l'IAM arrière, le direct éventuel sur la face arrière, l'ombrage arrière et le mismatch arrière.
+
+  L'ancien calcul (sol moyen uniforme) surestimait la face arrière, surtout pour les trackers.
 - **IAM** : Fresnel avec couche antireflet, ou profil utilisateur du `.PAN`.
 - **Module** : modèle à une diode (`pvlib.pvsystem.calcparams_pvsyst`). Les paramètres Rs, Rsh(G), γ, μγ et μIsc sont lus dans le `.PAN`. IL et I0 sont calculés à partir d'Isc et de Voc.
-- **Faible éclairement** : le modèle à une diode est calé sur les rendements relatifs déclarés dans le `.PAN`, c'est-à-dire les points de fonctionnement à 25 °C (1100, 800, 600, 400, 200, 100 W/m²) ou les champs `RelEffic`. La puissance est multipliée par (1 + rendement relatif du .PAN) / (1 + rendement relatif du modèle), interpolé selon l'irradiance. Ce calage est actif par défaut et peut être désactivé dans la section Modules.
+- **Faible éclairement** : le modèle à une diode peut être calé sur les rendements relatifs déclarés dans le `.PAN`, c'est-à-dire les points de fonctionnement à 25 °C (1100, 800, 600, 400, 200, 100 W/m²) ou les champs `RelEffic`. La puissance est alors multipliée par (1 + rendement relatif du .PAN) / (1 + rendement relatif du modèle), interpolé selon l'irradiance. Trois modes sont proposés dans la section Modules :
+  - **automatique** (par défaut) : calage seulement si le `.PAN` contient un jeu de mesures, c'est-à-dire un point de référence marqué `True` avec Voc et Isc renseignés (fichiers de laboratoire). Sinon, les points déclarés sont en général recalculés par le modèle lui-même, et le modèle brut est conservé ;
+  - **toujours** : calage dès que des points sont présents ;
+  - **jamais** : modèle à une diode brut.
 - **Thermique** : bilan thermique Uc / Uv (absorption du `.PAN`).
 - **Pertes DC** : LID, qualité, mismatch des modules et des chaînes, pertes ohmiques proportionnelles au courant.
 - **Onduleurs** : courbes Pin→Pout du `.OND` aux trois tensions, interpolées sur la tension MPP du champ. Sont aussi pris en compte : le seuil de démarrage, la sortie de plage MPPT basse, et la Pmax déclassée selon la température ambiante + **offset** (TPMax → TPNom → TPLim1 → TPLimAbs).

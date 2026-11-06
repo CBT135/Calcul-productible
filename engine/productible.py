@@ -5,7 +5,7 @@ Chaîne de calcul (pas horaire) :
   TMY PVGIS (CSV/JSON) -> recalage optionnel Global Solar Atlas (mensuel ou annuel, GHI/DIF, T° en option)
   -> position solaire -> masque lointain (direct + facteur diffus) -> transposition Perez
   -> ombrages proches 1D entre rangées (sheds fixes, trackers mono-axe, Est-Ouest) + perte de vue du ciel
-  -> salissure -> IAM -> face arrière (pvlib infinite sheds) -> modèle une diode PVsyst (.PAN) + thermique PVsyst
+  -> salissure -> IAM -> face arrière (modèle 2D, sol non uniforme) -> modèle une diode PVsyst (.PAN) + thermique PVsyst
   -> pertes DC (ombrage électrique selon chaînes, LID, qualité, mismatch, mismatch arrière, ohmiques)
   -> onduleurs (.OND : rendement f(Pin, V), seuil, Pmax déclassée en température avec offset)
   -> auxiliaires, ohmiques AC, transformateur, ligne HTA, indisponibilité, limite d'injection
@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.4.0"
+ENGINE_VERSION = "1.5.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -85,12 +85,17 @@ def parse_pan(text):
             g, t, rel = float(m.group(2)), float(m.group(3)), float(m.group(4))
             if abs(t - 25) < 0.5 and g > 0:
                 ll[g] = rel
+        # jeu mesuré : point de référence marqué « True » avec Voc et Isc renseignés (ex. fichiers TÜV)
+        for m in re.finditer(r'Point_\d+=\s*True\s*,\s*([\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)', blk.group(0)):
+            if float(m.group(4)) > 0 and float(m.group(5)) > 0:
+                pan['lowlight_measured'] = True
     for g in (800, 600, 400, 200):
         v = _f(kv, f'RelEffic{g}')
         if v is not None and float(g) not in ll:
             ll[float(g)] = v
     ll.setdefault(1000.0, 0.0)
     pan['lowlight'] = sorted(ll.items()) if len(ll) > 1 else []
+    pan.setdefault('lowlight_measured', False)
     # paramètres une diode IL_ref, I0_ref (méthode PVsyst : Isc et Voc imposés)
     nV = pan['gamma'] * pan['ns'] * K_B * 298.15 / Q_E
 
@@ -369,6 +374,97 @@ def _horizon_diffuse_factor(hz, tilt, az_pvlib):
     return float((cosi * vis).sum() / tot) if tot > 0 else 1.0
 
 
+def _ray_hits(Pt, D, A, B):
+    """Distance t > 0 du premier segment [A, B] touché par chaque rayon Pt + t·D (inf si aucun)."""
+    ev = B - A
+    den = D[:, None, 0] * ev[None, :, 1] - D[:, None, 1] * ev[None, :, 0]
+    q = A[None] - Pt[:, None]
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t = (q[..., 0] * ev[None, :, 1] - q[..., 1] * ev[None, :, 0]) / den
+        u = (q[..., 0] * D[:, None, 1] - q[..., 1] * D[:, None, 0]) / den
+    ok = (np.abs(den) > 1e-12) & (t > 1e-9) & (u >= 0) & (u <= 1)
+    return np.where(ok, t, np.inf).min(axis=1)
+
+
+_VF_CACHE = {}
+
+
+def _vf_tables(beta_deg, width, pitch, hc, nseg=40, nray=240, npts=12, K=12):
+    key = (round(beta_deg, 3), round(width, 4), round(pitch, 4), round(hc, 4))
+    if key not in _VF_CACHE:
+        _VF_CACHE[key] = _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K)
+    return _VF_CACHE[key]
+
+
+def _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K):
+    """Facteurs de vue 2D pour des rangées infinies d'inclinaison signée beta (face avant vers +x),
+    calculés par lancer de rayons : sol -> ciel par bande, face arrière -> bande de sol, face arrière -> ciel."""
+    b = math.radians(beta_deg)
+    k = np.arange(-K, K + 1)
+    Ep = np.stack([k * pitch + width / 2 * math.cos(b), np.full(k.shape, hc - width / 2 * math.sin(b))], 1)
+    Em = np.stack([k * pitch - width / 2 * math.cos(b), np.full(k.shape, hc + width / 2 * math.sin(b))], 1)
+    th = (np.arange(nray) + 0.5) / nray * np.pi
+    dth = np.pi / nray
+    xs = (np.arange(nseg) + 0.5) / nseg * pitch - pitch / 2
+    Pg = np.repeat(np.stack([xs, np.zeros(nseg)], 1), nray, 0)
+    Dg = np.tile(np.stack([np.cos(th), np.sin(th)], 1), (nseg, 1))
+    tg = _ray_hits(Pg, Dg, Ep, Em)
+    vf_gs = (np.tile(0.5 * np.sin(th) * dth, nseg) * np.isinf(tg)).reshape(nseg, nray).sum(1)
+    s = (np.arange(npts) + 0.5) / npts - 0.5
+    nrear = np.array([-math.sin(b), -math.cos(b)])
+    pts = np.stack([s * width * math.cos(b), hc - s * width * math.sin(b)], 1) + nrear * 1e-6
+    a = th - np.pi / 2
+    Dr = np.stack([nrear[0] * np.cos(a) - nrear[1] * np.sin(a), nrear[0] * np.sin(a) + nrear[1] * np.cos(a)], 1)
+    Pr = np.repeat(pts, nray, 0)
+    Drr = np.tile(Dr, (npts, 1))
+    others = k != 0
+    tr = _ray_hits(Pr, Drr, Ep[others], Em[others])
+    wgt = np.tile(0.5 * np.cos(a) * dth, npts) / npts
+    free = np.isinf(tr)
+    down = Drr[:, 1] < -1e-12
+    tgr = np.where(down, -Pr[:, 1] / np.where(down, Drr[:, 1], -1.0), 0.0)
+    hit = free & down
+    xg = Pr[:, 0] + tgr * Drr[:, 0]
+    seg = np.floor(((xg + pitch / 2) % pitch) / pitch * nseg)
+    seg = np.where(hit, seg, 0).astype(int).clip(0, nseg - 1)
+    vf_rg = np.bincount(seg[hit], weights=wgt[hit], minlength=nseg)
+    vf_rs = float(wgt[free & ~down].sum())
+    return xs, vf_gs, vf_rg, vf_rs
+
+
+def rear_irradiance_2d(beta, az_x, zen, azi, beam_h, dhi, width, pitch, hc, albedo, transparent=0.0):
+    """Irradiance diffuse reçue par la face arrière (W/m²), sol découpé en bandes éclairées ou à l'ombre
+    heure par heure (modèle 2D de rangées infinies). beta : inclinaison signée (face avant vers +x),
+    az_x : azimut (pvlib) de la direction +x. Retourne (sol, ciel) en séries numpy."""
+    beta = np.asarray(beta, float)
+    lo_b, hi_b = float(np.floor(beta.min())), float(np.ceil(beta.max()))
+    grid = np.array([lo_b]) if hi_b - lo_b < 1e-6 else np.arange(lo_b, hi_b + 2.0, 2.0)
+    T = [_vf_tables(g, width, pitch, hc) for g in grid]
+    xs = T[0][0]
+    GS = np.array([x[1] for x in T]); RG = np.array([x[2] for x in T]); RS = np.array([x[3] for x in T])
+    if len(grid) == 1:
+        gs, rg, rs = np.repeat(GS, len(beta), 0), np.repeat(RG, len(beta), 0), np.repeat(RS, len(beta))
+    else:
+        i = np.clip(np.searchsorted(grid, beta) - 1, 0, len(grid) - 2)
+        f = (beta - grid[i]) / (grid[i + 1] - grid[i])
+        gs = GS[i] * (1 - f[:, None]) + GS[i + 1] * f[:, None]
+        rg = RG[i] * (1 - f[:, None]) + RG[i + 1] * f[:, None]
+        rs = RS[i] * (1 - f) + RS[i + 1] * f
+    br = np.radians(beta)
+    z = np.radians(np.asarray(zen, float))
+    sz = np.cos(z)
+    sx = np.sin(z) * np.cos(np.radians(np.asarray(azi, float) - az_x))
+    with np.errstate(divide='ignore', invalid='ignore'):
+        tp = np.where(sz > 0.02, sx / sz, 0.0)
+    xa = width / 2 * np.cos(br) - (hc - width / 2 * np.sin(br)) * tp
+    xb = -width / 2 * np.cos(br) - (hc + width / 2 * np.sin(br)) * tp
+    lo, L = np.minimum(xa, xb), np.abs(xa - xb)
+    lit = (((xs[None, :] - lo[:, None]) % pitch) >= L[:, None]) & (L < pitch)[:, None]
+    lit = lit + (1 - lit) * transparent
+    gnd = np.asarray(beam_h, float)[:, None] * lit + np.asarray(dhi, float)[:, None] * gs
+    return albedo * (gnd * rg).sum(1), np.asarray(dhi, float) * rs, gnd.mean(1)
+
+
 def face_irradiance(ctx, face):
     """Irradiance d'une face (avant et arrière), ombrages et IAM. Retourne un dict de séries horaires."""
     w, sp, day, dni_extra, am = ctx['w'], ctx['sp'], ctx['day'], ctx['dni_extra'], ctx['am']
@@ -396,6 +492,7 @@ def face_irradiance(ctx, face):
         h_center = float(cfg_s.get('height', 1.0)) + width / 2 * math.sin(math.radians(face['tilt']))
 
     aoi = irradiance.aoi(tilt, saz, zen, azi)
+    cz_s = pd.Series(np.cos(np.radians(zen.values)), index=w.index).clip(lower=0)
     # masque lointain : direct coupé sous l'horizon
     if hz is not None:
         hsun = 90 - zen
@@ -484,11 +581,18 @@ def face_irradiance(ctx, face):
 
     # face arrière
     if bf['enabled']:
+        # direct éventuel sur la face arrière (soleil derrière le plan) : pvlib infinite sheds
         sh_b = infinite_sheds.get_irradiance(tilt, saz, zen, azi, gcr, h_center, pitch, w.ghi, w.dhi,
                                              dni_eff, bf['albedo_ground'], model='haydavies',
                                              dni_extra=dni_extra, iam_back=iam_d['ground'],
                                              transmission_factor=bf['transparent'] / 100)
-        rear_inc = sh_b['poa_back'].fillna(0).clip(lower=0).where(day, 0)
+        rear_dir = sh_b['poa_back_direct'].fillna(0).clip(lower=0)
+        # diffus arrière : modèle 2D, sol non uniforme (bandes à l'ombre / au soleil)
+        beam_h = (dni_eff * cz_s).clip(lower=0).where(day, 0)
+        rg_, rs_, gnd_ = rear_irradiance_2d(rot.values, (axis_az + 90.0) % 360, zen.values, azi.values,
+                                            beam_h.values, w.dhi.where(day, 0).values, width, pitch, h_center,
+                                            bf['albedo_ground'], bf['transparent'] / 100)
+        rear_inc = (pd.Series(rg_ + rs_, index=w.index) * iam_d['ground'] + rear_dir).clip(lower=0).where(day, 0)
         rear_eff = rear_inc * (1 - bf['rear_shading'] / 100)
     else:
         rear_inc = rear_eff = pd.Series(0.0, index=w.index)
@@ -753,7 +857,7 @@ DEFAULTS = dict(
     project=dict(name='Projet', variant='Var0', author=''),
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
     meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=True),
-    module=dict(lowlight_cal=True),
+    module=dict(lowlight_cal='auto'),
     horizon=dict(use=True),
     structure=dict(fields=[], type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
                    n_rows=17, n_high=3, orientation='portrait', sub_in_height=None, elec_effect=80.0,
@@ -880,7 +984,11 @@ def _simulate_one(cfg_in, files):
         mask = g_eff > 1
         gp = g_eff.clip(lower=0.1)
         pm, im, vm, _ = module_point(pan, gp.values, t_cell.values)
-        llf = lowlight_factor(pan) if cfg['module'].get('lowlight_cal', True) else None
+        # auto : calage seulement sur un jeu de mesures ; 'force' : toujours ; False : jamais
+        mode = cfg['module'].get('lowlight_cal', True)
+        do_cal = mode == 'force' or (mode not in (False, 'off') and pan.get('lowlight_measured'))
+        llf = lowlight_factor(pan) if do_cal else None
+        pan['lowlight_applied'] = bool(llf)
         ll_fac = llf(gp.values) if llf else 1.0
         pm = pm * ll_fac
         p_mod = pd.Series(pm, index=w.index).clip(lower=0).where(mask, 0)
