@@ -20,6 +20,40 @@ Application web d'estimation de productible photovoltaïque au pas horaire, qui 
 
 Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 
+## Simuler un extrait météo (exploitation)
+
+Le bouton **Simuler un extrait météo**, à droite de « Lancer la simulation », compare la production mesurée sur une courte période à la simulation du projet, calculée avec les mesures météo du site. Il ne demande pas de TMY : seuls le site, le `.PAN`, le `.OND` et les saisies du projet sont nécessaires.
+
+1. Choisir le fuseau horaire des données (heure légale française, UTC, UTC+1, UTC+2), la convention d'horodatage (début ou fin de période), le plan du capteur GTI (plan des modules, tracker, pan Est ou Ouest, horizontal ou autre plan) et le point de mesure de la production (point d'injection ou sortie des onduleurs).
+2. Déposer le fichier Excel ou CSV : la simulation démarre aussitôt. Un modèle vierge est téléchargeable (`modele_extrait_meteo.xlsx`).
+
+| Colonne | |
+|---|---|
+| Date et heure | obligatoire (une colonne, ou une colonne date et une colonne heure) |
+| GTI (W/m²) | irradiance mesurée dans le plan du capteur ; à défaut, GHI obligatoire |
+| GHI, DHI (W/m²) | facultatifs ; le DHI mesuré améliore la décomposition |
+| T ambiante (°C) | obligatoire |
+| Vent (m/s) | facultatif (1 m/s par défaut) |
+| Énergie mesurée (kWh) | facultative ; ou « Puissance mesurée (kW) », moyenne sur le pas |
+
+Les noms de colonnes sont reconnus automatiquement (GTI, POA, irradiance plan, température ambiante, production kWh…), ainsi que les séparateurs `;` ou `,` et les décimales à virgule. Les pas de 1 à 60 min sont ramenés à l'heure (moyennes ; énergies cumulées, complétées au prorata si l'heure est incomplète).
+
+**Méthode** :
+- **Décomposition** :
+  - GTI seul : GTI-DIRINT (Marion 2015) ;
+  - GTI + DHI : inversion de la transposition isotrope ;
+  - GHI seul : Erbs ;
+  - GHI + DHI : direct déduit.
+- **Calage** : le direct et le diffus sont ensuite calés heure par heure pour retrouver exactement le GTI mesuré.
+- **Hypothèses propres à l'extrait** : le masque lointain n'est pas appliqué, puisque le capteur le voit déjà. Il n'y a pas de recalage Global Solar Atlas, et l'indisponibilité est mise à 0 %. Toutes les autres pertes du projet sont conservées.
+
+**Résultats** :
+- énergie simulée et mesurée, rapport mesuré / simulé ;
+- heures d'arrêt probable (production mesurée < 5 % du simulé) et rapport hors arrêts ;
+- PR mesuré et simulé sur l'irradiation mesurée ;
+- courbe horaire, bilan journalier et diagramme de pertes de la période ;
+- export Excel et CSV horaire.
+
 ## Vérifications de dimensionnement
 
 | Vérification | Règle | Effet |

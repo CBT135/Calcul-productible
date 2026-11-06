@@ -45,12 +45,29 @@
       <div class="acts">
         <button type="button" class="ghost" id="toggleSide">Saisie</button>
         <button type="button" class="primary" id="btnRun" disabled>Lancer la simulation</button>
+        <button type="button" class="second" id="btnExtract" disabled title="Simuler une courte période à partir de mesures météo du site">Simuler un extrait météo</button>
       </div>
     </header>
 
     <section class="scroll">
+      <div id="extractCard" class="card" hidden></div>
       <div id="checklist" class="card"></div>
       <div id="alerts" class="card"></div>
+      <div id="extractResults" hidden>
+        <div class="tiles" id="exTiles"></div>
+        <div class="card"><h3>Production horaire : mesurée et simulée</h3><div class="chartbox"><canvas id="chExtract"></canvas></div><p class="note" id="exNote"></p></div>
+        <div class="card"><h3>Bilan journalier</h3><div class="tblwrap" id="exDaily"></div></div>
+        <div class="card"><h3>Données et hypothèses</h3><div id="exInfo"></div></div>
+        <div class="card"><h3>Diagramme de pertes sur la période</h3><div id="exLosses"></div></div>
+        <div class="card exports">
+          <h3>Exporter</h3>
+          <div class="actions">
+            <button type="button" id="exXlsx" class="primary">Classeur Excel (.xlsx)</button>
+            <button type="button" id="exCsv">Série horaire (.csv)</button>
+          </div>
+          <p class="note">Le classeur contient la synthèse, le bilan journalier, le diagramme de pertes et la série horaire (mesures, irradiance décomposée, puissances simulées, énergie mesurée).</p>
+        </div>
+      </div>
       <div id="results" hidden>
         <div class="tiles" id="tiles"></div>
         <nav class="tabs" id="tabs">

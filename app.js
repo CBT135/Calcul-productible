@@ -28,6 +28,7 @@ const DEFAULTS = {
     ['Pertes spectrales et réflexion', 1.5], ['Transposition', 1.0], ['Paramètres des modules PV', 2.0],
     ['Efficacité onduleur', 0.5], ['Encrassement', 1.0], ['Mismatch', 0.9], ['Estimation dégradation', 0.9]] },
   lifetime: { years: 1, degradation: 0.4 },
+  extract: { tz: 'Europe/Paris', stamp: 'start', sensor: 'modules', sensor_tilt: null, sensor_azimuth: null, meter: 'grid' },
 };
 const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
 const FILES = {
@@ -57,7 +58,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const nf = (v, d = 0) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pf = (v, d = 1) => (v == null || isNaN(v) ? '–' : nf(100 * v, d) + ' %');
 
-const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {} };
+const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {}, ext: null, exFile: null };
 
 // ------------------------------------------------------------------ worker
 const worker = new Worker('worker.js');
@@ -797,7 +798,8 @@ function renderChecklist(list) {
     const ok = k === 'gsa' ? !!S.gsa : !!S.files[k] && !(S.info[k] && S.info[k].error);
     return `<div class="${ok ? 'ok' : f.req ? '' : 'opt'}"><i>${ok ? '✓' : f.req ? '!' : '–'}</i>${f.label}</div>`;
   }).join('');
-  $('#checklist').innerHTML = S.res ? '' : `<h3>Fichiers d'entrée</h3><div class="cl">${items}</div>
+  $('#btnExtract').disabled = !(S.ready && S.files.pan && S.files.ond && !r.blocked && S.cfg.site.lat != null && S.cfg.site.lon != null);
+  $('#checklist').innerHTML = S.res || S.ext ? '' : `<h3>Fichiers d'entrée</h3><div class="cl">${items}</div>
     <p class="note">${r.ok ? 'Tout est prêt : lancer la simulation.' : r.blocked ? 'Simulation bloquée : voir les vérifications ci-dessous.' : r.missing.length ? 'Fichiers obligatoires manquants : ' + r.missing.map((k) => FILES[k].label).join(', ') + '.' : 'Chargement du moteur…'}</p>`;
   $('#btnRun').disabled = !r.ok;
 }
@@ -824,7 +826,7 @@ $('#btnRun').addEventListener('click', async () => {
   const t0 = performance.now();
   try {
     const res = await call('run', { cfg, files });
-    S.res = res;
+    S.res = res; S.ext = null; $('#extractResults').hidden = true; closeExtractCard();
     if (res.blocked) { S.check = { alerts: res.alerts, sub_in_height: S.check?.sub_in_height }; renderAlerts(); setStatus('Simulation bloquée : voir les vérifications.', 'err', 100); return; }
     renderResults();
     setStatus(`Simulation terminée en ${nf((performance.now() - t0) / 1000, 1)} s · ${nf(res.summary.yield_kwh_kwc, 0)} kWh/kWc · PR ${pf(res.summary.pr, 1)}`, 'ok', 100);
@@ -996,7 +998,7 @@ function loadProject(d) {
 }
 // Efface tout ce qui reste affiché du projet précédent (résultats, graphiques, champs libres, repère sur la carte).
 function resetView() {
-  $('#results').hidden = true;
+  $('#results').hidden = true; $('#extractResults').hidden = true; S.ext = null; S.exFile = null; closeExtractCard();
   Object.values(S.charts).forEach((c) => c.destroy()); S.charts = {};
   ['#tiles', '#tblMonthly', '#shResults', '#fieldsResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
   $$('#form input[type=file]').forEach((i) => (i.value = ''));
@@ -1157,3 +1159,122 @@ function load() {
 }
 
 load(); buildForm(); fillForm(); syncStrings(); initMap(); refreshAll();
+
+// ------------------------------------------------------------------ extrait météo mesuré (exploitation)
+function simFiles() {
+  const files = { pan: S.files.pan, ond: S.files.ond };
+  if (S.cfg.structure.type === 'roof') {
+    Object.assign(files, { pan_extra: S.lib.pan.map((x) => x.text), ond_extra: S.lib.ond.map((x) => x.text), near_masks: {} });
+    S.cfg.structure.fields.forEach((f) => { if (S.near[f.id]) files.near_masks[String(f.id)] = S.near[f.id].text; });
+  }
+  return files;
+}
+function closeExtractCard() { const c = $('#extractCard'); if (c) { c.hidden = true; c.innerHTML = ''; } $('#btnExtract')?.classList.remove('on'); }
+$('#btnExtract').addEventListener('click', () => {
+  if (!$('#extractCard').hidden) return closeExtractCard();
+  renderExtractCard();
+  $('#btnExtract').classList.add('on');
+  $('#extractCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+function renderExtractCard() {
+  const e = S.cfg.extract = Object.assign(clone(DEFAULTS.extract), S.cfg.extract || {});
+  const t = S.cfg.structure.type;
+  const sensors = [['modules', t === 'tracker' ? 'Sur le tracker (plan des modules)' : t === 'roof' ? 'Plan du premier toit' : 'Plan des modules']];
+  if (t === 'ew') { sensors[0] = ['modules', 'Pan Est']; sensors.push(['west', 'Pan Ouest']); }
+  sensors.push(['horizontal', 'Horizontal (GHI)'], ['custom', 'Autre plan…']);
+  const opt = (path, label, opts) => `<div class="fld"><label>${label}</label><select data-ex="${path}">${opts.map(([v, l]) => `<option value="${v}" ${String(e[path]) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+  const c = $('#extractCard'); c.hidden = false;
+  c.innerHTML = `<div class="head2"><div><h3>Simuler un extrait météo</h3>
+      <p class="note" style="margin-top:4px">Fichier Excel ou CSV horodaté : GTI (ou GHI), diffus si disponible, température ambiante et, si possible, l'énergie mesurée. La simulation reprend toutes les saisies du projet ; elle démarre dès le dépôt du fichier.</p></div>
+      <button type="button" class="x" id="exClose" title="Fermer">×</button></div>
+    <div class="links dl"><a href="modele_extrait_meteo.xlsx" download>Télécharger le modèle de fichier météo vierge (.xlsx)</a></div>
+    <div class="grid">
+      ${opt('tz', 'Fuseau horaire des données', [['Europe/Paris', 'Heure légale française (été / hiver)'], ['UTC', 'UTC'], ['UTC+1', 'UTC+1 (heure d\'hiver toute l\'année)'], ['UTC+2', 'UTC+2']])}
+      ${opt('stamp', 'Horodatage', [['start', 'Début de période'], ['end', 'Fin de période']])}
+      ${opt('sensor', 'Plan du capteur GTI', sensors)}
+      <div class="fld" data-exc ${e.sensor === 'custom' ? '' : 'hidden'}><label>Inclinaison capteur (°)</label><input type="number" step="any" data-ex="sensor_tilt" value="${e.sensor_tilt ?? ''}"></div>
+      <div class="fld" data-exc ${e.sensor === 'custom' ? '' : 'hidden'}><label>Orientation capteur (0 = Sud, Est &lt; 0)</label><input type="number" step="any" data-ex="sensor_azimuth" value="${e.sensor_azimuth ?? ''}"></div>
+      ${opt('meter', 'Production mesurée au', [['grid', 'Point d\'injection (compteur)'], ['inverter', 'Sortie des onduleurs (AC)']])}
+    </div>
+    <div class="drop ${S.exFile ? 'loaded' : ''}" id="exDrop"><span class="ico">${S.exFile ? '✓' : '⇪'}</span><div class="dtxt"><b>${S.exFile ? esc(S.exFile.name) : 'Déposer ou choisir le fichier météo'}</b>${S.exFile ? 'Cliquer pour changer de fichier ; modifier une option relance la simulation.' : '.xlsx, .xls ou .csv · pas de 10 min à 1 h'}</div>
+      <input type="file" accept=".xlsx,.xlsm,.csv,.txt" hidden></div>`;
+  $('#exClose').addEventListener('click', closeExtractCard);
+  $$('#extractCard [data-ex]').forEach((el) => el.addEventListener('change', () => {
+    const k = el.dataset.ex; e[k] = el.type === 'number' ? (el.value === '' ? null : Number(el.value)) : el.value;
+    $$('#extractCard [data-exc]').forEach((x) => (x.hidden = e.sensor !== 'custom'));
+    save(); if (S.exFile && (k !== 'sensor' || e.sensor !== 'custom' || (e.sensor_tilt != null))) runExtract();
+  }));
+  const box = $('#exDrop'), input = $('input', box);
+  box.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => input.files[0] && loadExtract(input.files[0]));
+  box.addEventListener('dragover', (ev) => { ev.preventDefault(); box.classList.add('over'); });
+  box.addEventListener('dragleave', () => box.classList.remove('over'));
+  box.addEventListener('drop', (ev) => { ev.preventDefault(); box.classList.remove('over'); ev.dataTransfer.files[0] && loadExtract(ev.dataTransfer.files[0]); });
+}
+async function loadExtract(file) {
+  S.exFile = { name: file.name, data: new Uint8Array(await file.arrayBuffer()) };
+  renderExtractCard(); runExtract();
+}
+async function runExtract() {
+  if (!S.exFile) return;
+  const b1 = $('#btnRun'), b2 = $('#btnExtract'); b1.disabled = true; b2.disabled = true;
+  setStatus('Simulation de l\'extrait météo…', 'busy', 40);
+  const t0 = performance.now();
+  try {
+    const res = await call('extract', { cfg: clone(S.cfg), files: simFiles(), data: S.exFile.data, name: S.exFile.name });
+    if (res.blocked) { S.check = { alerts: res.alerts, sub_in_height: S.check?.sub_in_height }; renderAlerts(); setStatus('Simulation bloquée : voir les vérifications.', 'err', 100); return; }
+    S.ext = res; S.res = null; $('#results').hidden = true;
+    renderExtract();
+    const x = res.extract.summary;
+    setStatus(`Extrait simulé en ${nf((performance.now() - t0) / 1000, 1)} s · ${x.n_hours} h · ${nf(x.e_sim_kwh / 1000, 2)} MWh simulés` + (x.ratio != null ? ` · mesuré / simulé ${pf(x.ratio, 1)}` : ''), 'ok', 100);
+  } catch (err) { setStatus('Extrait météo : ' + err.message, 'err', 100); }
+  finally { renderChecklist((S.check && S.check.alerts) || []); }
+}
+function renderExtract() {
+  const r = S.ext, X = r.extract, s = X.summary, has = s.e_meas_kwh != null;
+  $('#extractResults').hidden = false; renderChecklist((S.check && S.check.alerts) || []);
+  const unit = s.e_sim_kwh > 20000 ? ['MWh', 1000, 2] : ['kWh', 1, 0];
+  $('#exTiles').innerHTML = [
+    ['main', nf(s.e_sim_kwh / unit[1], unit[2]), `${unit[0]} simulés · ${s.n_days} j`],
+    ['', has ? nf(s.e_meas_kwh / unit[1], unit[2]) : '–', `${unit[0]} mesurés`],
+    ['pv', has ? pf(s.ratio, 1) : '–', 'Mesuré / simulé'],
+    ['', has && s.ratio_ok != null ? pf(s.ratio_ok, 1) : '–', `Hors arrêts probables (${s.n_outage_h} h)`],
+    ['', nf(s.gti_meas_kwh_m2, 1), `kWh/m² mesurés (${esc(s.sensor)})`],
+    ['', s.pr_meas != null ? `${pf(s.pr_meas, 1)} / ${pf(s.pr_sim_ref, 1)}` : pf(s.pr_sim, 1), s.pr_meas != null ? 'PR mesuré / simulé' : 'PR simulé'],
+  ].map(([c, v, l]) => `<div class="tile ${c}"><b>${v}</b><span>${l}</span></div>`).join('');
+  const se = X.series;
+  chart('chExtract', {
+    data: { labels: se.t, datasets: [
+      { type: 'line', label: 'Simulée (kWh/h)', data: se.sim.map((v) => Math.max(0, v)), borderColor: '#f2a20c', backgroundColor: '#f2a20c33', fill: true, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y' },
+      ...(has ? [{ type: 'line', label: 'Mesurée (kWh/h)', data: se.meas.map((v) => (v == null ? null : Math.max(0, v))), borderColor: '#18212b', pointRadius: 0, borderWidth: 1.5, spanGaps: false, yAxisID: 'y' }] : []),
+      { type: 'line', label: 'Irradiance mesurée (W/m²)', data: se.gti, borderColor: '#4c4fe0', borderDash: [4, 3], pointRadius: 0, borderWidth: 1, yAxisID: 'y1' }] },
+    options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      scales: { x: { ticks: { maxTicksLimit: 14, autoSkip: true }, grid: { display: false } }, y: { title: { display: true, text: 'kWh par heure' }, grid: { color: '#eef1f4' }, min: 0 },
+        y1: { position: 'right', min: 0, title: { display: true, text: 'W/m²' }, grid: { display: false } } },
+      plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (c) => `${c.dataset.label} : ${nf(c.parsed.y, 1)}` } } } },
+  });
+  $('#exNote').textContent = `Période ${s.period_start} – ${s.period_end} (${s.tz}) · production mesurée : ${s.meter}.` + (s.n_outage_h ? ` ${s.n_outage_h} h d'arrêt probable (production mesurée < 5 % du simulé), soit ${nf(s.e_outage_kwh, 0)} kWh simulés.` : '');
+  const D = X.daily;
+  $('#exDaily').innerHTML = `<table class="res"><tr><th>Date</th><th>Irradiation<br>mesurée kWh/m²</th><th>GlobInc<br>simulé kWh/m²</th><th>T amb<br>°C</th><th>E simulée<br>kWh</th><th>E mesurée<br>kWh</th><th>Mesuré /<br>simulé</th><th>PR<br>mesuré</th><th>Heures<br>d'arrêt</th></tr>` +
+    D.map((d) => `<tr><td>${d.date}</td><td>${nf(d.gti, 2)}</td><td>${nf(d.glob_inc, 2)}</td><td>${nf(d.t_amb, 1)}</td><td>${nf(d.e_sim, 0)}</td><td>${d.e_meas == null ? '–' : nf(d.e_meas, 0)}</td><td class="${d.ratio != null && d.ratio < 0.9 ? 'neg' : ''}">${d.ratio == null ? '–' : pf(d.ratio, 1)}</td><td>${d.pr_meas == null ? '–' : pf(d.pr_meas, 1)}</td><td>${d.outage_h || ''}</td></tr>`).join('') +
+    `<tr class="tot"><td>Période</td><td>${nf(s.gti_meas_kwh_m2, 2)}</td><td>${nf(s.glob_inc_kwh_m2, 2)}</td><td>${nf(s.t_amb, 1)}</td><td>${nf(s.e_sim_kwh, 0)}</td><td>${has ? nf(s.e_meas_kwh, 0) : '–'}</td><td>${has ? pf(s.ratio, 1) : '–'}</td><td>${s.pr_meas == null ? '–' : pf(s.pr_meas, 1)}</td><td>${s.n_outage_h || ''}</td></tr></table>`;
+  const I = X.info, cols = Object.entries(I.columns).map(([k, v]) => `${k} → « ${esc(v)} »`).join(' · ');
+  $('#exInfo').innerHTML = `<table class="res kv">
+    <tr><td>Fichier</td><td>${esc(S.exFile ? S.exFile.name : '')} · ${I.n_rows} lignes · pas de ${nf(I.step_min, 0)} min → ${I.n_hours} h</td></tr>
+    <tr><td>Colonnes reconnues</td><td>${cols}</td></tr>
+    <tr><td>Irradiance</td><td>${esc(s.method)} · capteur : ${esc(s.sensor)}</td></tr>
+    <tr><td>Contrôle de la décomposition</td><td>GTI recalculé ${nf(s.gti_model_kwh_m2, 2)} kWh/m² pour ${nf(s.gti_meas_kwh_m2, 2)} mesurés</td></tr>
+    <tr><td>Production mesurée</td><td>${has ? `${s.n_hours_meas} h renseignées · ${esc(s.meter)}` : 'absente du fichier : simulation seule'}</td></tr>
+    <tr><td>Hypothèses propres à l'extrait</td><td>Masque lointain non appliqué (déjà vu par le capteur) · pas de recalage Global Solar Atlas · indisponibilité 0 % · autres pertes reprises du projet</td></tr>
+    ${I.warnings.length ? `<tr><td>Remarques</td><td class="ex-warn">${I.warnings.map(esc).join(' ; ')}</td></tr>` : ''}
+    <tr><td>Moteur</td><td>v${r.engine} · pvlib ${r.pvlib}</td></tr></table>`;
+  const L = r.losses, maxAbs = Math.max(...L.filter((x) => x.pct != null).map((x) => Math.abs(x.pct)), 1);
+  $('#exLosses').innerHTML = L.filter((x) => !/Masque lointain|Indisponibilit/.test(x.label)).map((x) => x.pct == null ? `<div class="loss lvl"><span>${esc(x.label)}</span><span></span><span></span><span class="val">${nf(x.value, 2)} ${x.unit}</span></div>`
+    : `<div class="loss"><span>${esc(x.label)}</span><span class="pct ${x.pct < -0.005 ? 'neg' : x.pct > 0.005 ? 'pos' : ''}">${x.pct > 0 ? '+' : ''}${nf(x.pct, 2)} %</span><span class="bar2"><i class="${x.pct > 0 ? 'pos' : ''}" style="width:${Math.min(100, 100 * Math.abs(x.pct) / maxAbs)}%"></i></span><span class="val">${x.value == null ? '' : nf(x.value, 2) + ' ' + x.unit}</span></div>`).join('');
+}
+$('#exXlsx').addEventListener('click', async () => {
+  setStatus('Génération du classeur Excel…', 'busy', 60);
+  try { const bytes = await call('xlsx'); download(baseName() + '_extrait.xlsx', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })); setStatus('Classeur Excel exporté.', 'ok', 100); }
+  catch (e) { setStatus('Export Excel impossible : ' + e.message, 'err', 100); }
+});
+$('#exCsv').addEventListener('click', async () => { const t = await call('csv'); download(baseName() + '_extrait_horaire.csv', new Blob(['﻿' + t], { type: 'text/csv' })); });

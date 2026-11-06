@@ -48,8 +48,14 @@ def _run(cfg_json, files_json):
     files = json.loads(files_json)
     _last = P.simulate(json.loads(cfg_json), files)
     return P.to_json(_last)
+def _extract(cfg_json, files_json, data, name):
+    global _last
+    _last = P.simulate_extract(json.loads(cfg_json), json.loads(files_json), bytes(data.to_py()), name)
+    return P.to_json(_last)
+def _template():
+    return P.extract_template()
 def _xlsx():
-    return P.export_xlsx(_last)
+    return P.export_extract_xlsx(_last) if _last.get('extract') else P.export_xlsx(_last)
 def _csv():
     return _last['_hourly'].to_csv(sep=';', decimal=',')
 `);
@@ -73,6 +79,12 @@ self.onmessage = async (ev) => {
     else if (cmd === 'run') {
       post('status', { text: 'Simulation horaire en cours…', pct: 50 });
       out = JSON.parse(call('_run', JSON.stringify(args.cfg), JSON.stringify(args.files)));
+    } else if (cmd === 'extract') {
+      post('status', { text: 'Simulation de l\'extrait météo…', pct: 50 });
+      out = JSON.parse(call('_extract', JSON.stringify(args.cfg), JSON.stringify(args.files), args.data, args.name || ''));
+    } else if (cmd === 'template') {
+      const b = call('_template');
+      out = b.toJs(); b.destroy();
     } else if (cmd === 'xlsx') {
       const b = call('_xlsx');
       out = b.toJs(); b.destroy();

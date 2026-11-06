@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.5.3"
+ENGINE_VERSION = "1.6.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -820,8 +820,8 @@ def _combine_fields(cfg, files, runs, alerts):
     for k in ('e_grid_mwh', 'pnom_kwc', 'pac_kva', 'n_modules', 'n_inverters'):
         summ[k] = sm(lambda r, k=k: r['summary'][k])
     summ['yield_kwh_kwc'] = summ['e_grid_mwh'] * 1000 / Pt
-    summ['pr'] = monthly[12]['pr']
-    summ['pr_bifi'] = monthly[12]['pr_bifi']
+    summ['pr'] = monthly[-1]['pr']
+    summ['pr_bifi'] = monthly[-1]['pr_bifi']
     summ['dc_ac'] = summ['pnom_kwc'] / summ['pac_kva'] if summ['pac_kva'] else None
     summ['limit_angle'] = None
     summ['sub_in_height'] = '–'
@@ -908,6 +908,8 @@ DEFAULTS = dict(
     project=dict(name='Projet', variant='Var0', author=''),
     site=dict(lat=45.0, lon=0.0, alt=0.0, albedo=0.20),
     meteo=dict(tmy_has_horizon=None, gsa_mode='monthly', gsa_align_temp=True),
+    extract=dict(tz='Europe/Paris', stamp='start', sensor='modules', sensor_tilt=None, sensor_azimuth=None,
+                 meter='grid'),
     module=dict(lowlight_cal='auto'),
     horizon=dict(use=True),
     structure=dict(fields=[], type='fixed', tilt=16.0, azimuth=0.0, az_convention='sud0', pitch=9.01, width=7.19, height=0.80,
@@ -959,7 +961,10 @@ def _simulate_one(cfg_in, files):
     if any(a['level'] == 'block' for a in alerts):
         return dict(ok=False, blocked=True, alerts=alerts, pan=_public(pan), ond=_public(ond))
 
-    w, tmy_info = read_tmy(files['tmy'], files.get('tmy_name', ''))
+    if files.get('_weather') is not None:      # extrait météo mesuré, déjà décomposé (simulate_extract)
+        w, tmy_info = files['_weather'].copy(), dict(files['_weather_info'])
+    else:
+        w, tmy_info = read_tmy(files['tmy'], files.get('tmy_name', ''))
     if cfg['meteo'].get('tmy_has_horizon') is None and tmy_info['use_horizon'] is not None:
         cfg['meteo']['tmy_has_horizon'] = bool(tmy_info['use_horizon'])
     site = cfg['site']
@@ -1275,7 +1280,7 @@ def _simulate_one(cfg_in, files):
         'RearEff': agg['rear_eff'].round(1), 'T_cell': t_cell_mean.round(2), 'V_dc': v_arr.round(1),
         'P_dc_kW': (p_dc / 1000).round(2), 'P_ac_kW': (pac_tot / 1000).round(2),
         'P_grid_kW': (p_grid / 1000).round(2)})
-    hourly.index = hourly.index.strftime('%m-%d %H:%M')
+    hourly.index = hourly.index.strftime('%Y-%m-%d %H:%M' if tmy_info.get('extract') else '%m-%d %H:%M')
     res = dict(ok=True, blocked=False, engine=ENGINE_VERSION, pvlib=pvlib.__version__,
                config=cfg, summary=summary, monthly=monthly, losses=loss_list, alerts=alerts,
                p90=p90, lifetime=lifetime, faces=face_info, meteo_correction=meteo_rows,
@@ -1409,6 +1414,410 @@ def simulate(cfg_in, files):
     return res
 
 
+# ======================================================================================
+# 8. Extrait météo mesuré (exploitation) : simulation sur une courte période
+# ======================================================================================
+def _norm(h):
+    import unicodedata
+    h = unicodedata.normalize('NFKD', str(h or '')).encode('ascii', 'ignore').decode().lower()
+    return re.sub(r'\s+', ' ', h).strip()
+
+
+def _num(col):
+    if not pd.api.types.is_numeric_dtype(col):
+        col = col.astype(object).map(lambda x: x if isinstance(x, (int, float)) else str(x)).astype(str).str.replace(' ', '').str.replace(' ', '').str.replace(',', '.')
+        col = col.replace({'': None, 'nan': None, 'None': None, '-': None})
+    return pd.to_numeric(col, errors='coerce')
+
+
+def _extract_table(data, name):
+    """Lit le fichier (xlsx ou csv) et renvoie un DataFrame brut avec la ligne d'en-tête détectée."""
+    name = (name or '').lower()
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    if name.endswith(('.xlsx', '.xlsm')) or data[:2] == b'PK':
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        sheets = sorted(wb.worksheets, key=lambda ws: 0 if _norm(ws.title).startswith(('donnee', 'data', 'mesure')) else 1)
+        for ws in sheets:
+            rows = [list(r) for r in ws.iter_rows(values_only=True)]
+            for i, r in enumerate(rows[:30]):
+                hs = [_norm(x) for x in r]
+                if any(re.search(r'date|heure|time|horodat', h) for h in hs) and sum(bool(h) for h in hs) >= 2:
+                    body = [x for x in rows[i + 1:] if any(v not in (None, '') for v in x)]
+                    if body:
+                        return pd.DataFrame(body, columns=[str(x) if x is not None else f'col{j}' for j, x in enumerate(r)])
+        raise ValueError("Aucune feuille avec une colonne « Date et heure » et des données n'a été trouvée")
+    text = data.decode('utf-8-sig', errors='replace')
+    if '�' in text:
+        text = data.decode('cp1252', errors='replace')
+    lines = text.splitlines()
+    start = next((i for i, l in enumerate(lines[:30]) if re.search(r'date|heure|time|horodat', _norm(l))), 0)
+    sep = ';' if lines[start].count(';') >= lines[start].count(',') else (',' if ',' in lines[start] else '\t')
+    return pd.read_csv(io.StringIO('\n'.join(lines[start:])), sep=sep, dtype=str)
+
+
+def read_extract(data, name, opts):
+    """Extrait météo mesuré -> DataFrame horaire (index UTC = début d'heure) : gti, ghi, dhi, temp_air,
+    wind_speed, e_meas (kWh). Les pas inférieurs à l'heure sont moyennés (énergies cumulées)."""
+    df = _extract_table(data, name)
+    hs = {c: _norm(c) for c in df.columns}
+    find = lambda pred: next((c for c, h in hs.items() if pred(h)), None)
+    c_date = find(lambda h: re.search(r'date|horodat|timestamp', h))
+    c_time = find(lambda h: re.search(r'heure|time', h) and not re.search(r'date|horodat|timestamp', h))
+    c_gti = find(lambda h: re.search(r'\bgti\b|\bpoa\b|plan|inclin|g_?poa', h))
+    c_ghi = find(lambda h: re.search(r'\bghi\b|horizontal|g_?hor', h) and not re.search(r'diffus|dhi', h))
+    c_dhi = find(lambda h: re.search(r'\bdhi\b|diffus|\bdif\b', h))
+    c_t = find(lambda h: re.search(r'amb|\btamb|t_?air|temperature ext|air temp', h) or h in ('temperature', 't', 'temperature (c)'))
+    c_wind = find(lambda h: re.search(r'vent|wind', h))
+    c_e = find(lambda h: re.search(r'kwh|mwh|energie|energy', h))
+    c_p = find(lambda h: re.search(r'\bkw\b|\(kw\)|\bmw\b|puissance|power', h) and not re.search(r'kwh|mwh|w/m|wm2', h))
+    if c_date is None:
+        raise ValueError('Colonne « Date et heure » introuvable')
+    if c_gti is None and c_ghi is None:
+        raise ValueError('Il faut au moins une colonne GTI (irradiance dans le plan) ou GHI (W/m²)')
+    if c_t is None:
+        raise ValueError('Colonne « T ambiante (°C) » introuvable')
+    # horodatage
+    d = df[c_date]
+    if c_time is not None and c_time != c_date:
+        t = df[c_time].map(lambda x: x.strftime('%H:%M:%S') if hasattr(x, 'strftime') else str(x))
+        d = d.map(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x)) + ' ' + t
+    if not pd.api.types.is_datetime64_any_dtype(d):
+        if pd.api.types.is_numeric_dtype(d):
+            dd = pd.Series(pd.NaT, index=d.index)
+        else:
+            d = d.astype(object).map(lambda x: x if hasattr(x, 'strftime') else (None if x is None else str(x).strip()))
+            dd = pd.to_datetime(d, errors='coerce', format='mixed', dayfirst=True)
+        if dd.isna().mean() > 0.5:   # dates Excel numériques
+            dd = pd.to_datetime(_num(d), unit='D', origin='1899-12-30', errors='coerce')
+        d = dd
+    out = pd.DataFrame({'gti': _num(df[c_gti]) if c_gti else np.nan, 'ghi': _num(df[c_ghi]) if c_ghi else np.nan,
+                        'dhi': _num(df[c_dhi]) if c_dhi else np.nan, 'temp_air': _num(df[c_t]),
+                        'wind_speed': _num(df[c_wind]) if c_wind else np.nan,
+                        'e': _num(df[c_e]) if c_e else np.nan, 'p': _num(df[c_p]) if (c_p and not c_e) else np.nan})
+    out.index = pd.DatetimeIndex(d)
+    out = out[out.index.notna()].sort_index()
+    out = out[~out.index.duplicated()]
+    if len(out) < 2:
+        raise ValueError('Moins de deux lignes horodatées lisibles')
+    if out.index.tz is None:
+        tz = opts.get('tz') or 'Europe/Paris'
+        if tz.upper().startswith('UTC') and tz.upper() != 'UTC':
+            off = float(tz[3:].replace(',', '.') or 0)
+            out.index = out.index - pd.Timedelta(hours=off)
+            out.index = out.index.tz_localize('UTC')
+        else:
+            try:
+                out.index = out.index.tz_localize(tz, ambiguous='infer', nonexistent='shift_forward')
+            except Exception:
+                out.index = out.index.tz_localize(tz, ambiguous='NaT', nonexistent='shift_forward')
+                out = out[out.index.notna()]
+    out.index = out.index.tz_convert('UTC')
+    step = pd.Series(out.index).diff().dt.total_seconds().median() / 60.0
+    if not step or step > 61:
+        raise ValueError(f'Pas de temps de {step:.0f} min : il faut un pas horaire ou plus fin')
+    if opts.get('stamp') == 'end':          # horodatage en fin de période -> début
+        out.index = out.index - pd.Timedelta(minutes=step)
+    warn = []
+    for c in ('gti', 'ghi', 'dhi'):
+        mx = out[c].max()
+        if pd.notna(mx) and 0 < mx < 2.0:
+            out[c] *= 1000.0
+            warn.append(f'{c.upper()} lu en kW/m² et converti en W/m²')
+    unit_e = _norm(c_e) if c_e else ''
+    if c_e and 'mwh' in unit_e:
+        out['e'] *= 1000.0
+    if c_p and not c_e and re.search(r'\bmw\b|\(mw\)', _norm(c_p)):
+        out['p'] *= 1000.0
+    # passage au pas horaire
+    hour = out.index.floor('h')
+    g = out.groupby(hour)
+    n_exp = max(1, round(60.0 / step))
+    hr = g[['gti', 'ghi', 'dhi', 'temp_air', 'wind_speed', 'p']].mean()
+    if c_e:   # énergie : somme, complétée au prorata si l'heure est incomplète
+        cov_e = (g['e'].count() / n_exp).clip(upper=1)
+        hr['e_meas'] = (g['e'].sum(min_count=1) / cov_e).where(cov_e >= 0.5)
+    else:     # puissance moyenne (kW) x 1 h = kWh
+        hr['e_meas'] = hr['p']
+    cov = g['temp_air'].count() / n_exp
+    hr = hr[cov >= 0.5]
+    for c in ('gti', 'ghi', 'dhi'):
+        hr[c] = hr[c].clip(lower=0)
+    hr['wind_speed'] = hr['wind_speed'].fillna(1.0)
+    hr['temp_air'] = hr['temp_air'].interpolate(limit_direction='both')
+    cols = dict(date=c_date, heure=c_time, gti=c_gti, ghi=c_ghi, dhi=c_dhi, t_amb=c_t, vent=c_wind,
+                energie=c_e, puissance=c_p if not c_e else None)
+    info = dict(step_min=float(step), n_rows=int(len(out)), n_hours=int(len(hr)), columns={k: v for k, v in cols.items() if v},
+                warnings=warn, has=dict(gti=bool(c_gti), ghi=bool(c_ghi), dhi=bool(c_dhi), prod=bool(c_e or c_p),
+                                         wind=bool(c_wind)))
+    return hr.drop(columns=['p']), info
+
+
+def _sensor_plane(cfg, sp, idx):
+    """Inclinaison et azimut (pvlib, 180 = Sud) du capteur GTI."""
+    ex, st = cfg.get('extract') or {}, cfg['structure']
+    sensor = ex.get('sensor') or 'modules'
+    to_pv = lambda a: (float(a or 0) + 180.0) % 360
+    if sensor == 'custom':
+        return float(ex.get('sensor_tilt') or 0), to_pv(ex.get('sensor_azimuth')), 'personnalisé'
+    if sensor == 'horizontal':
+        return 0.0, 180.0, 'horizontal'
+    if st.get('type') == 'tracker':
+        trk = tracking.singleaxis(sp['apparent_zenith'], sp['azimuth'], axis_tilt=0,
+                                  axis_azimuth=to_pv(st.get('axis_azimuth')), max_angle=float(st['max_angle']),
+                                  backtrack=bool(st.get('backtrack', True)),
+                                  gcr=float(st['width']) / float(st['pitch']))
+        return trk['surface_tilt'].fillna(0.0), trk['surface_azimuth'].fillna(180.0), 'tracker'
+    if st.get('type') == 'ew':
+        o = float(st.get('azimuth') or 0.0)
+        a = o - 90.0 if sensor != 'west' else o + 90.0
+        return float(st['tilt']), to_pv(a), 'pan Ouest' if sensor == 'west' else 'pan Est'
+    if st.get('type') == 'roof' and st.get('fields'):
+        f = st['fields'][0]
+        return float(f['tilt']), to_pv(f.get('azimuth')), f.get('name') or 'champ 1'
+    return float(st['tilt']), to_pv(st.get('azimuth')), 'plan des modules'
+
+
+def decompose_extract(hr, cfg):
+    """GHI / DNI / DHI à partir des mesures : GTI seul (GTI-DIRINT), GTI + DHI (inversion isotrope),
+    GHI seul (Erbs) ou GHI + DHI. Renvoie aussi le plan du capteur."""
+    site = cfg['site']
+    loc = pvlib.location.Location(float(site['lat']), float(site['lon']), altitude=float(site.get('alt') or 0))
+    t_mid = hr.index + pd.Timedelta(minutes=30)
+    sp = loc.get_solarposition(t_mid, temperature=hr.temp_air.values)
+    sp.index = hr.index
+    zen, azi = sp['apparent_zenith'], sp['azimuth']
+    cz = np.cos(np.radians(sp['zenith'])).clip(lower=0)
+    day = zen < 90
+    dni_extra = pd.Series(irradiance.get_extra_radiation(t_mid).values, index=hr.index)
+    tilt, saz, sname = _sensor_plane(cfg, sp, hr.index)
+    alb = float(site.get('albedo') or 0.2)
+    has_gti, has_ghi, has_dhi = hr.gti.notna().any(), hr.ghi.notna().any(), hr.dhi.notna().any()
+    cs = loc.get_clearsky(t_mid, model='simplified_solis')
+    cs.index = hr.index
+    method = ''
+    if has_gti:
+        gti = hr.gti.fillna(0).where(day, 0)
+        aoi = irradiance.aoi(tilt, saz, zen, azi)
+        if has_dhi:
+            dhi = hr.dhi.fillna(0).where(day, 0)
+            cb = np.cos(np.radians(tilt))
+            cosa = np.cos(np.radians(aoi)).clip(lower=0)
+            den = cosa + alb * cz * (1 - cb) / 2
+            dni = ((gti - dhi * ((1 + cb) / 2 + alb * (1 - cb) / 2)) / den.where(den > 0.05, np.nan))
+            dni = dni.fillna(0).clip(lower=0, upper=1.1 * cs['dni'])
+            ghi = dhi + dni * cz
+            method = 'GTI + DHI mesurés (inversion de la transposition)'
+        else:
+            out = irradiance.gti_dirint(gti, aoi, zen, azi, hr.index, tilt, saz, albedo=alb, max_iterations=30)
+            ghi, dni, dhi = out['ghi'], out['dni'], out['dhi']
+            bad = ghi.isna() | dhi.isna() | dni.isna()
+            # heures non résolues : décomposition d'Erbs d'un GHI estimé (GTI ramené à l'horizontale)
+            if bad.any():
+                g_est = (gti * (cz / np.cos(np.radians(aoi)).clip(lower=0.3))).clip(upper=1.1 * cs['ghi']).where(bad, 0)
+                e = irradiance.erbs(g_est, zen, hr.index, dni_extra)
+                ghi, dni, dhi = ghi.where(~bad, g_est), dni.where(~bad, e['dni']), dhi.where(~bad, e['dhi'])
+            dni = dni.fillna(0).clip(lower=0, upper=1.1 * cs['dni'])
+            dhi = dhi.fillna(0).clip(lower=0)
+            ghi = dhi + dni * cz
+            method = 'GTI mesuré, décomposition GTI-DIRINT (Marion 2015)'
+    else:
+        ghi = hr.ghi.fillna(0).where(day, 0)
+        if has_dhi:
+            dhi = hr.dhi.fillna(0).where(day, 0).clip(upper=ghi)
+            method = 'GHI + DHI mesurés'
+        else:
+            dhi = irradiance.erbs(ghi, zen, hr.index, dni_extra)['dhi']
+            method = 'GHI mesuré, décomposition d\'Erbs'
+        dni = ((ghi - dhi) / cz.where(cz > 0.065, np.nan)).fillna(0).clip(lower=0, upper=1.1 * cs['dni'])
+        dhi = ghi - dni * cz
+    w = pd.DataFrame({'ghi': ghi.where(day, 0), 'dni': dni.where(day, 0), 'dhi': dhi.where(day, 0),
+                      'temp_air': hr.temp_air, 'wind_speed': hr.wind_speed}, index=hr.index).astype(float)
+    # contrôle : GTI recalculé (Perez) sur le plan du capteur
+    tr = irradiance.get_total_irradiance(tilt, saz, zen, azi, w.dni, w.ghi, w.dhi, dni_extra=dni_extra,
+                                         albedo=alb, model='perez', airmass=pvlib.atmosphere.get_relative_airmass(zen))
+    gti_model = tr['poa_global'].fillna(0).where(day, 0)
+    if has_gti:
+        # calage heure par heure : direct et diffus multipliés pour retrouver exactement le GTI mesuré
+        k = (hr.gti.fillna(0) / gti_model.where(gti_model > 20)).clip(0.7, 1.3).fillna(1.0)
+        w[['ghi', 'dni', 'dhi']] = w[['ghi', 'dni', 'dhi']].mul(k, axis=0)
+        gti_model = gti_model * k
+    return w, dict(method=method, sensor=sname, gti_model=gti_model)
+
+
+def simulate_extract(cfg_in, files, data, name):
+    """Simulation sur un extrait météo mesuré et comparaison à la production mesurée."""
+    cfg = merge(DEFAULTS, cfg_in)
+    ex = cfg['extract']
+    hr, info = read_extract(data, name, ex)
+    w, dec = decompose_extract(hr, cfg)
+    loc_tz = ex.get('tz') or 'Europe/Paris'
+    if loc_tz.upper().startswith('UTC') and loc_tz.upper() != 'UTC':
+        from datetime import timezone, timedelta
+        tzo = timezone(timedelta(hours=float(loc_tz[3:].replace(',', '.') or 0)))
+    else:
+        tzo = loc_tz
+    li = hr.index.tz_convert(tzo)
+    f2 = {k: v for k, v in files.items() if k not in ('horizon', 'gsa', 'pvgis_monthly', 'tmy')}
+    f2['_weather'] = w
+    f2['_weather_info'] = dict(source='Mesures', db='Extrait météo mesuré', extract=True, use_horizon=None,
+                               offset_h=0.5, lat=cfg['site']['lat'], lon=cfg['site']['lon'], elev=cfg['site'].get('alt'),
+                               years=f"{li[0]:%d/%m/%Y} – {li[-1]:%d/%m/%Y}")
+    c2 = json.loads(json.dumps(cfg))
+    c2['meteo']['gsa_mode'] = 'none'
+    c2['horizon']['use'] = False          # le capteur voit déjà l'horizon lointain
+    c2['losses']['availability'] = 0.0    # l'indisponibilité réelle se lit dans la comparaison
+    res = simulate(c2, f2)
+    if not res.get('ok'):
+        return res
+    h = res['_hourly']
+    pk = float(res['summary']['pnom_kwc'])
+    col = 'P_ac_kW' if ex.get('meter') == 'inverter' else 'P_grid_kW'
+    sim = pd.Series(h[col].values, index=hr.index).clip(lower=0) if ex.get('meter') == 'inverter' \
+        else pd.Series(h[col].values, index=hr.index)
+    meas = hr['e_meas']
+    has_meas = bool(meas.notna().any())
+    gti_meas = hr['gti'] if info['has']['gti'] else hr['ghi']
+    gi_sim = pd.Series(h['GlobInc'].values, index=hr.index)
+    cmp_mask = meas.notna() if has_meas else pd.Series(True, index=hr.index)
+    outage = (sim > 0.05 * pk) & (meas < 0.05 * sim) & meas.notna()
+    ok_mask = cmp_mask & ~outage
+    S_ = lambda x, m=cmp_mask: float(x[m].sum())
+    e_sim, e_meas = S_(sim), S_(meas) if has_meas else None
+    g_ref = S_(gti_meas.fillna(0)) / 1000
+    summ = dict(
+        period_start=f'{li[0]:%d/%m/%Y %H:%M}', period_end=f'{(li[-1] + pd.Timedelta(hours=1)):%d/%m/%Y %H:%M}',
+        tz=str(loc_tz), step_min=info['step_min'], n_rows=info['n_rows'], n_hours=info['n_hours'],
+        n_hours_meas=int(cmp_mask.sum()) if has_meas else 0, n_days=int(len(set(li.date))),
+        sensor=dec['sensor'], method=dec['method'], meter='sortie des onduleurs (AC)' if ex.get('meter') == 'inverter' else "point d'injection",
+        gti_meas_kwh_m2=float(gti_meas.fillna(0).sum() / 1000), gti_model_kwh_m2=float(dec['gti_model'].sum() / 1000),
+        ghi_kwh_m2=float(w.ghi.sum() / 1000), glob_inc_kwh_m2=float(gi_sim.sum() / 1000),
+        t_amb=float(w.temp_air.mean()), pnom_kwc=pk,
+        e_sim_kwh=e_sim, e_meas_kwh=e_meas, ratio=(e_meas / e_sim) if has_meas and e_sim > 0 else None,
+        yield_sim=e_sim / pk, yield_meas=(e_meas / pk) if has_meas else None,
+        pr_sim=e_sim / (S_(gi_sim) / 1000 * pk) if S_(gi_sim) > 0 else None,
+        pr_meas=(e_meas / (g_ref * pk)) if has_meas and g_ref > 0 and dec['sensor'] != 'horizontal' else None,
+        pr_sim_ref=(e_sim / (g_ref * pk)) if g_ref > 0 and dec['sensor'] != 'horizontal' else None,
+        n_outage_h=int(outage.sum()), e_outage_kwh=float(sim[outage].sum()),
+        ratio_ok=(float(meas[ok_mask].sum()) / float(sim[ok_mask].sum())) if has_meas and sim[ok_mask].sum() > 0 else None,
+    )
+    # journalier (heure locale)
+    day_key = pd.Index(li.date)
+    dfd = pd.DataFrame({'gti': gti_meas.fillna(0).values / 1000, 'gi': gi_sim.values / 1000, 'sim': sim.values,
+                        'meas': meas.values, 'm': cmp_mask.values, 'out': outage.values, 'tamb': w.temp_air.values},
+                       index=day_key)
+    daily = []
+    for dday, g in dfd.groupby(level=0):
+        es, em = float(g.sim[g.m].sum()), float(g.meas[g.m].sum()) if has_meas else None
+        daily.append(dict(date=f'{dday:%d/%m/%Y}', gti=float(g.gti.sum()), glob_inc=float(g.gi.sum()),
+                          t_amb=float(g.tamb.mean()), e_sim=float(g.sim.sum()), e_sim_cmp=es, e_meas=em,
+                          ratio=(em / es) if has_meas and es > 0 else None,
+                          pr_meas=(em / (float(g.gti[g.m].sum()) * pk)) if has_meas and g.gti[g.m].sum() > 0 else None,
+                          outage_h=int(g.out.sum())))
+    hourly = pd.DataFrame({
+        'Heure locale': [f'{t:%d/%m/%Y %H:%M}' for t in li],
+        'GTI mesuré W/m²': hr['gti'].round(1).values, 'GHI mesuré W/m²': hr['ghi'].round(1).values,
+        'DHI mesuré W/m²': hr['dhi'].round(1).values, 'T amb °C': hr['temp_air'].round(2).values,
+        'GHI modèle W/m²': w.ghi.round(1).values, 'DHI modèle W/m²': w.dhi.round(1).values,
+        'DNI modèle W/m²': w.dni.round(1).values, 'GTI recalculé W/m²': dec['gti_model'].round(1).values,
+        'GlobInc W/m²': gi_sim.round(1).values, 'T cellule °C': h['T_cell'].values,
+        'P DC simulée kW': h['P_dc_kW'].values, 'P AC simulée kW': h['P_ac_kW'].values,
+        'P réseau simulée kW': h['P_grid_kW'].values, 'E simulée kWh': sim.round(2).values,
+        'E mesurée kWh': meas.round(2).values, 'Arrêt probable': np.where(outage, 'oui', '')})
+    hourly.index = pd.Index([f'{t:%Y-%m-%d %H:%M}' for t in hr.index], name='UTC')
+    res['extract'] = dict(summary=summ, daily=daily, info=info, options=ex,
+                          series=dict(t=[f'{t:%d/%m %Hh}' for t in li], gti=hr['gti'].fillna(hr['ghi']).round(0).fillna(0).tolist(),
+                                      sim=sim.round(1).tolist(), meas=[None if pd.isna(x) else round(float(x), 1) for x in meas]))
+    res['_hourly'] = hourly
+    return res
+
+
+def export_extract_xlsx(res):
+    """Classeur de l'extrait météo : synthèse, journalier, pertes, série horaire."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    hd = PatternFill('solid', fgColor='18212B')
+    ex = res['extract']
+    s = ex['summary']
+
+    def put(ws, rows, head=None, widths=None):
+        r0 = 1
+        if head:
+            for j, v in enumerate(head, 1):
+                c = ws.cell(1, j, v); c.font = Font(bold=True, color='FFFFFF'); c.fill = hd
+                c.alignment = Alignment(wrap_text=True, vertical='center')
+            r0 = 2
+        for i, row in enumerate(rows):
+            for j, v in enumerate(row, 1):
+                ws.cell(r0 + i, j, v)
+        for j, wd in enumerate(widths or [], 1):
+            ws.column_dimensions[chr(64 + j) if j <= 26 else 'A' + chr(38 + j)].width = wd
+    ws = wb.active; ws.title = 'Synthèse'
+    lab = [('Période (heure locale)', f"{s['period_start']} – {s['period_end']}"), ('Fuseau horaire', s['tz']),
+           ('Pas de temps du fichier (min)', s['step_min']), ('Heures simulées', s['n_hours']),
+           ('Heures avec production mesurée', s['n_hours_meas']), ('Capteur GTI', s['sensor']),
+           ('Méthode de décomposition', s['method']), ('Point de mesure de la production', s['meter']),
+           ('Irradiation mesurée (kWh/m²)', s['gti_meas_kwh_m2']), ('GTI recalculé par le modèle (kWh/m²)', s['gti_model_kwh_m2']),
+           ('GlobInc simulé, plan des modules (kWh/m²)', s['glob_inc_kwh_m2']), ('T ambiante moyenne (°C)', s['t_amb']),
+           ('Puissance crête (kWc)', s['pnom_kwc']), ('Énergie simulée (kWh)', s['e_sim_kwh']),
+           ('Énergie mesurée (kWh)', s['e_meas_kwh']), ('Rapport mesuré / simulé', s['ratio']),
+           ('Rapport hors arrêts probables', s['ratio_ok']), ('Heures d\'arrêt probable', s['n_outage_h']),
+           ('Énergie simulée pendant ces arrêts (kWh)', s['e_outage_kwh']), ('PR simulé (GlobInc)', s['pr_sim']),
+           ('PR mesuré (irradiation mesurée)', s['pr_meas']), ('PR simulé (irradiation mesurée)', s['pr_sim_ref']),
+           ('Moteur', f"{res['engine']} · pvlib {res['pvlib']}")]
+    put(ws, lab, ['Grandeur', 'Valeur'], [46, 40])
+    ws = wb.create_sheet('Journalier')
+    put(ws, [[d['date'], d['gti'], d['glob_inc'], d['t_amb'], d['e_sim'], d['e_meas'], d['ratio'], d['pr_meas'], d['outage_h']]
+             for d in ex['daily']],
+        ['Date', 'Irradiation mesurée kWh/m²', 'GlobInc simulé kWh/m²', 'T amb °C', 'E simulée kWh', 'E mesurée kWh',
+         'Mesuré / simulé', 'PR mesuré', 'Heures d\'arrêt probable'], [12, 14, 14, 10, 14, 14, 12, 10, 12])
+    ws = wb.create_sheet('Pertes')
+    put(ws, [[l['label'], l['pct'], l['value'], l['unit']] for l in res['losses']], ['Étape', '%', 'Valeur', 'Unité'], [55, 10, 14, 8])
+    ws = wb.create_sheet('Horaire')
+    hr = res['_hourly']
+    put(ws, [[i] + [None if (isinstance(v, float) and np.isnan(v)) else v for v in row] for i, row in zip(hr.index, hr.values.tolist())],
+        ['UTC'] + list(hr.columns), [17, 17] + [12] * (len(hr.columns) - 1))
+    bio = io.BytesIO(); wb.save(bio)
+    return bio.getvalue()
+
+
+def extract_template():
+    """Modèle vierge de fichier météo (xlsx)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active; ws.title = 'Données'
+    head = ['Date et heure', 'GTI (W/m²)', 'GHI (W/m²)', 'DHI (W/m²)', 'T ambiante (°C)', 'Vent (m/s)', 'Énergie mesurée (kWh)']
+    for j, v in enumerate(head, 1):
+        c = ws.cell(1, j, v); c.font = Font(bold=True, color='FFFFFF'); c.fill = PatternFill('solid', fgColor='18212B')
+        c.alignment = Alignment(wrap_text=True, vertical='center')
+        ws.column_dimensions[chr(64 + j)].width = 18 if j == 1 else 14
+    ws.column_dimensions['G'].width = 18
+    for r in range(2, 3000):
+        ws.cell(r, 1).number_format = 'dd/mm/yyyy hh:mm'
+    ws.freeze_panes = 'A2'
+    n = wb.create_sheet('Notice')
+    lines = [
+        ('Modèle d\'extrait météo – Calcul productible PV', True), ('', False),
+        ('Une ligne par pas de temps (10 min, 15 min ou 1 h). Les pas inférieurs à l\'heure sont moyennés à l\'heure.', False),
+        ('Date et heure : obligatoire. Fuseau horaire et convention (début ou fin de période) se choisissent dans l\'application.', False),
+        ('GTI (W/m²) : irradiance mesurée dans le plan du capteur (pyranomètre ou cellule de référence). Préciser le plan dans l\'application.', False),
+        ('GHI / DHI (W/m²) : facultatifs. Sans GTI, le GHI est obligatoire. Le DHI améliore la décomposition s\'il est mesuré.', False),
+        ('T ambiante (°C) : obligatoire. Vent (m/s) : facultatif (1 m/s par défaut).', False),
+        ('Énergie mesurée (kWh) : facultative, énergie produite pendant le pas de temps (compteur ou onduleurs).', False),
+        ('  On peut la remplacer par une colonne « Puissance mesurée (kW) », moyenne sur le pas de temps.', False),
+        ('Les noms de colonnes peuvent varier (GTI, POA, Irradiance plan, Température ambiante, Production kWh…) : ils sont reconnus automatiquement.', False),
+        ('Les cases vides sont acceptées ; la nuit, l\'irradiance peut être laissée vide ou à 0.', False),
+    ]
+    for i, (t, b) in enumerate(lines, 1):
+        c = n.cell(i, 1, t); c.font = Font(bold=b, size=12 if b else 11)
+    n.column_dimensions['A'].width = 130
+    bio = io.BytesIO(); wb.save(bio)
+    return bio.getvalue()
+
+
 def _limit_angle(st):
     t = math.radians(float(st['tilt']))
     r = float(st['pitch']) / float(st['width'])
@@ -1429,7 +1838,8 @@ def _public(d):
 
 def to_json(res):
     r = {k: v for k, v in res.items() if not k.startswith('_')}
-    return json.dumps(r, default=lambda o: o.item() if isinstance(o, np.generic) else str(o))
+    txt = json.dumps(r, default=lambda o: o.item() if isinstance(o, np.generic) else str(o))
+    return re.sub(r'\b(NaN|-?Infinity)\b', 'null', txt)
 
 
 # ======================================================================================

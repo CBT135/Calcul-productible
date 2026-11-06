@@ -205,3 +205,18 @@ label.mini.filebtn{display:inline-block;cursor:pointer;font-weight:500;color:var
 .rmfoot{display:flex;gap:8px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 .rmpt span{display:flex;width:22px;height:22px;border-radius:50%;background:#f2a20c;color:#18212b;font:700 12px Inter,sans-serif;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)}
 .fchead .mini{white-space:nowrap}
+
+/* extrait météo */
+button.second{font:inherit;font-size:13px;font-weight:600;border-radius:8px;padding:9px 14px;cursor:pointer;border:1px solid var(--accent);background:#fff;color:var(--ink)}
+button.second:disabled{opacity:.45;cursor:not-allowed}
+button.second.on{background:var(--chip)}
+#extractCard .grid{margin:10px 0}
+#extractCard .head2{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+#extractCard .head2 h3{margin:0}
+#extractCard .x{border:0;background:none;font-size:20px;line-height:1;color:var(--muted);cursor:pointer}
+#extractCard select,#extractCard input[type=number]{width:100%}
+.ex-warn{color:#a8650a}
+table.res td.neg{color:var(--bad,#c0392b);font-weight:600}
+@media print{#extractCard,#extractResults{display:none!important}}
+#exInfo table td{white-space:normal;text-align:left;vertical-align:top}
+#exInfo table td:first-child{width:200px;color:var(--muted)}
