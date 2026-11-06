@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.5.2"
+ENGINE_VERSION = "1.5.3"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -414,20 +414,35 @@ def _ray_hits(Pt, D, A, B):
 _VF_CACHE = {}
 
 
-def _vf_tables(beta_deg, width, pitch, hc, nseg=40, nray=240, npts=12, K=12):
-    key = (round(beta_deg, 3), round(width, 4), round(pitch, 4), round(hc, 4))
+def _vf_tables(beta_deg, width, pitch, hc, twin=False, nseg=40, nray=240, npts=12, K=12):
+    key = (round(beta_deg, 3), round(width, 4), round(pitch, 4), round(hc, 4), bool(twin))
     if key not in _VF_CACHE:
-        _VF_CACHE[key] = _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K)
+        _VF_CACHE[key] = _vf_tables_calc(beta_deg, width, pitch, hc, twin, nseg, nray, npts, K)
     return _VF_CACHE[key]
 
 
-def _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K):
+def _panel_segments(beta_deg, width, pitch, hc, twin, K):
+    """Extrémités des panneaux sur 2K+1 périodes. Le panneau étudié est centré en x = k·pitch ;
+    avec twin (chapelles Est-Ouest dos à dos), le pan opposé est accolé côté faîtage, en x = k·pitch − w·cos β."""
+    b = math.radians(beta_deg)
+    k = np.arange(-K, K + 1)
+    segs = [(k * pitch, b)]
+    if twin:
+        segs.append((k * pitch - width * math.cos(b), -b))
+    Ep = np.concatenate([np.stack([x0 + width / 2 * math.cos(bb), np.full(k.shape, hc - width / 2 * math.sin(bb))], 1)
+                         for x0, bb in segs])
+    Em = np.concatenate([np.stack([x0 - width / 2 * math.cos(bb), np.full(k.shape, hc + width / 2 * math.sin(bb))], 1)
+                         for x0, bb in segs])
+    own = np.zeros(len(Ep), bool)
+    own[K] = True
+    return Ep, Em, own
+
+
+def _vf_tables_calc(beta_deg, width, pitch, hc, twin, nseg, nray, npts, K):
     """Facteurs de vue 2D pour des rangées infinies d'inclinaison signée beta (face avant vers +x),
     calculés par lancer de rayons : sol -> ciel par bande, face arrière -> bande de sol, face arrière -> ciel."""
     b = math.radians(beta_deg)
-    k = np.arange(-K, K + 1)
-    Ep = np.stack([k * pitch + width / 2 * math.cos(b), np.full(k.shape, hc - width / 2 * math.sin(b))], 1)
-    Em = np.stack([k * pitch - width / 2 * math.cos(b), np.full(k.shape, hc + width / 2 * math.sin(b))], 1)
+    Ep, Em, own = _panel_segments(beta_deg, width, pitch, hc, twin, K)
     th = (np.arange(nray) + 0.5) / nray * np.pi
     dth = np.pi / nray
     xs = (np.arange(nseg) + 0.5) / nseg * pitch - pitch / 2
@@ -442,8 +457,7 @@ def _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K):
     Dr = np.stack([nrear[0] * np.cos(a) - nrear[1] * np.sin(a), nrear[0] * np.sin(a) + nrear[1] * np.cos(a)], 1)
     Pr = np.repeat(pts, nray, 0)
     Drr = np.tile(Dr, (npts, 1))
-    others = k != 0
-    tr = _ray_hits(Pr, Drr, Ep[others], Em[others])
+    tr = _ray_hits(Pr, Drr, Ep[~own], Em[~own])
     wgt = np.tile(0.5 * np.cos(a) * dth, npts) / npts
     free = np.isinf(tr)
     down = Drr[:, 1] < -1e-12
@@ -457,14 +471,14 @@ def _vf_tables_calc(beta_deg, width, pitch, hc, nseg, nray, npts, K):
     return xs, vf_gs, vf_rg, vf_rs
 
 
-def rear_irradiance_2d(beta, az_x, zen, azi, beam_h, dhi, width, pitch, hc, albedo, transparent=0.0):
+def rear_irradiance_2d(beta, az_x, zen, azi, beam_h, dhi, width, pitch, hc, albedo, transparent=0.0, twin=False):
     """Irradiance diffuse reçue par la face arrière (W/m²), sol découpé en bandes éclairées ou à l'ombre
     heure par heure (modèle 2D de rangées infinies). beta : inclinaison signée (face avant vers +x),
     az_x : azimut (pvlib) de la direction +x. Retourne (sol, ciel) en séries numpy."""
     beta = np.asarray(beta, float)
     lo_b, hi_b = float(np.floor(beta.min())), float(np.ceil(beta.max()))
     grid = np.array([lo_b]) if hi_b - lo_b < 1e-6 else np.arange(lo_b, hi_b + 2.0, 2.0)
-    T = [_vf_tables(g, width, pitch, hc) for g in grid]
+    T = [_vf_tables(g, width, pitch, hc, twin) for g in grid]
     xs = T[0][0]
     GS = np.array([x[1] for x in T]); RG = np.array([x[2] for x in T]); RS = np.array([x[3] for x in T])
     if len(grid) == 1:
@@ -481,10 +495,13 @@ def rear_irradiance_2d(beta, az_x, zen, azi, beam_h, dhi, width, pitch, hc, albe
     sx = np.sin(z) * np.cos(np.radians(np.asarray(azi, float) - az_x))
     with np.errstate(divide='ignore', invalid='ignore'):
         tp = np.where(sz > 0.02, sx / sz, 0.0)
-    xa = width / 2 * np.cos(br) - (hc - width / 2 * np.sin(br)) * tp
-    xb = -width / 2 * np.cos(br) - (hc + width / 2 * np.sin(br)) * tp
-    lo, L = np.minimum(xa, xb), np.abs(xa - xb)
-    lit = (((xs[None, :] - lo[:, None]) % pitch) >= L[:, None]) & (L < pitch)[:, None]
+    # ombre portée au sol par chaque panneau de la période (le pan opposé en chapelle Est-Ouest)
+    lit = np.ones((len(beta), len(xs)), bool)
+    for x0, bb in [(0.0, br)] + ([(-width * np.cos(br), -br)] if twin else []):
+        xa = x0 + width / 2 * np.cos(bb) - (hc - width / 2 * np.sin(bb)) * tp
+        xb = x0 - width / 2 * np.cos(bb) - (hc + width / 2 * np.sin(bb)) * tp
+        lo, L = np.minimum(xa, xb), np.abs(xa - xb)
+        lit &= (((xs[None, :] - lo[:, None]) % pitch) >= L[:, None]) & (L < pitch)[:, None]
     lit = lit + (1 - lit) * transparent
     gnd = np.asarray(beam_h, float)[:, None] * lit + np.asarray(dhi, float)[:, None] * gs
     return albedo * (gnd * rg).sum(1), np.asarray(dhi, float) * rs, gnd.mean(1)
@@ -624,7 +641,8 @@ def face_irradiance(ctx, face):
         beam_h = (dni_eff * cz_s + dhi_d * ai).clip(lower=0).where(day, 0)
         rg_, rs_, gnd_ = rear_irradiance_2d(rot.values, (axis_az + 90.0) % 360, zen.values, azi.values,
                                             beam_h.values, (dhi_d * (1 - ai)).values, width, pitch, h_center,
-                                            bf['albedo_ground'], bf['transparent'] / 100)
+                                            bf['albedo_ground'], bf['transparent'] / 100,
+                                            twin=bool(face.get('ew')))
         rear_inc = (pd.Series(rg_ * iam_r['ground'] + rs_ * iam_r['sky'], index=w.index) + rear_dir).clip(lower=0).where(day, 0)
         rear_eff = rear_inc * (1 - bf['rear_shading'] / 100)
     else:
@@ -978,9 +996,9 @@ def _simulate_one(cfg_in, files):
         # orientation du faîtage : 0 (Sud) -> pan Est à -90° et pan Ouest à +90° (PVsyst)
         o = float(st.get('azimuth') or 0.0) if st.get('az_convention', 'sud0') in ('sud0', 'pvsyst') else float(st.get('azimuth', 180.0)) - 180.0
         faces = [dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o - 90.0 + 180.0) % 360,
-                      azimuth_pvsyst=((o - 90.0 + 180.0) % 360) - 180.0, name='Est'),
+                      azimuth_pvsyst=((o - 90.0 + 180.0) % 360) - 180.0, name='Est', ew=True),
                  dict(kind='fixed', share=0.5, tilt=float(st['tilt']), azimuth=(o + 90.0 + 180.0) % 360,
-                      azimuth_pvsyst=((o + 90.0 + 180.0) % 360) - 180.0, name='Ouest')]
+                      azimuth_pvsyst=((o + 90.0 + 180.0) % 360) - 180.0, name='Ouest', ew=True)]
     else:
         faces = [dict(kind='fixed', share=1.0, tilt=float(st['tilt']), azimuth=to_pvlib(st['azimuth']),
                       name=st.get('field_name') or 'Fixe')]

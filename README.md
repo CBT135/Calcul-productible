@@ -52,6 +52,7 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 - **Ombrages proches** : modèle 1D de rangées infinies (`shaded_fraction1d`), première rangée non ombrée, perte de vue du ciel pour le diffus.
 - **Ombrage électrique** « selon les chaînes », avec une ou plusieurs configurations (sous-chaînes en hauteur × part des tables, total 100 %). Une étude complète est calculée par configuration, puis toutes les grandeurs sont moyennées au prorata des tables. Fraction de l'effet électrique paramétrable ; les chaînes suivent les rangées. En mode « auto », on compte 2 sous-chaînes par module portrait en demi-cellules, 1 en cellules entières, et 3 par module paysage.
 - **Face arrière** : modèle 2D de rangées infinies à **sol non uniforme**, pour toutes les structures (sheds, Est-Ouest, tracker) :
+  - en Est-Ouest, les deux pans sont modélisés dos à dos (chapelles) : le pan opposé fait de l'ombre au sol et masque la vue de la face arrière ;
   - le sol entre deux rangées est découpé en 40 bandes, éclairées ou à l'ombre heure par heure selon la position du soleil (la fraction transparente laisse passer une part du direct) ;
   - chaque bande reçoit le direct si elle est au soleil, plus le diffus du ciel pondéré par sa vue du ciel ;
   - la face arrière voit chaque bande et le ciel selon des facteurs de vue calculés par lancer de rayons, avec 12 rangées de part et d'autre ; pour un tracker, les facteurs sont tabulés tous les 2° d'angle de rotation ;
