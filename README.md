@@ -55,7 +55,8 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
   - le sol entre deux rangées est découpé en 40 bandes, éclairées ou à l'ombre heure par heure selon la position du soleil (la fraction transparente laisse passer une part du direct) ;
   - chaque bande reçoit le direct si elle est au soleil, plus le diffus du ciel pondéré par sa vue du ciel ;
   - la face arrière voit chaque bande et le ciel selon des facteurs de vue calculés par lancer de rayons, avec 12 rangées de part et d'autre ; pour un tracker, les facteurs sont tabulés tous les 2° d'angle de rotation ;
-  - sont appliqués ensuite l'albédo, l'IAM arrière, le direct éventuel sur la face arrière, l'ombrage arrière et le mismatch arrière.
+  - le diffus du ciel est séparé à la manière de Hay-Davies : la part circumsolaire suit l'ombre portée des rangées comme le direct, la part isotrope est pondérée par la vue du ciel ;
+  - sont appliqués ensuite l'albédo, l'IAM de la face arrière (calculé pour une surface inclinée de 180° − inclinaison, qui voit le sol presque de face), le direct éventuel sur la face arrière, l'ombrage arrière et le mismatch arrière.
 
   L'ancien calcul (sol moyen uniforme) surestimait la face arrière, surtout pour les trackers.
 - **IAM** : Fresnel avec couche antireflet, ou profil utilisateur du `.PAN`.

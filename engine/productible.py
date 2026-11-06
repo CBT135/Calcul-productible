@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.5.0"
+ENGINE_VERSION = "1.5.1"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -561,6 +561,7 @@ def face_irradiance(ctx, face):
     else:
         soil = 1 - float(soil_cfg) / 100
     iam_cfg = ctx['iam']
+    tilt_rear = 180.0 - (float(np.median(np.abs(tilt[day]))) if day.any() else 20.0)
     if iam_cfg['mode'] == 'pan' and len(iam_cfg.get('profile', [])) >= 3:
         th = [p[0] for p in iam_cfg['profile']]
         val = [p[1] for p in iam_cfg['profile']]
@@ -569,6 +570,7 @@ def face_irradiance(ctx, face):
         iam_d = iam.marion_diffuse('interp', 30.0, theta_ref=th, iam_ref=val, normalize=False)
         iam_d = {'sky': float(np.mean(np.atleast_1d(iam_d['sky']))),
                  'ground': float(np.mean(np.atleast_1d(iam_d['ground'])))}
+        md_r = iam.marion_diffuse('interp', tilt_rear, theta_ref=th, iam_ref=val, normalize=False)
     else:
         n_g, n_ar = float(iam_cfg.get('n', 1.526)), iam_cfg.get('n_ar', 1.29)
         n_ar = float(n_ar) if n_ar else None
@@ -576,6 +578,9 @@ def face_irradiance(ctx, face):
         md = iam.marion_diffuse('physical', float(np.median(tilt[day])) if day.any() else 20.0,
                                 n=n_g, n_ar=n_ar)
         iam_d = {'sky': float(md['sky']), 'ground': float(md['ground'])}
+        md_r = iam.marion_diffuse('physical', tilt_rear, n=n_g, n_ar=n_ar)
+    # IAM de la face arrière : surface inclinée de 180° - tilt, qui voit le sol presque de face
+    iam_r = {k: float(np.mean(np.atleast_1d(md_r[k]))) for k in ('sky', 'ground')}
     front_eff = (beam_sh * soil * iam_b + diff_sh * soil * iam_d['sky']
                  + gnd_front * soil * iam_d['ground']).where(day, 0)
 
@@ -584,15 +589,18 @@ def face_irradiance(ctx, face):
         # direct éventuel sur la face arrière (soleil derrière le plan) : pvlib infinite sheds
         sh_b = infinite_sheds.get_irradiance(tilt, saz, zen, azi, gcr, h_center, pitch, w.ghi, w.dhi,
                                              dni_eff, bf['albedo_ground'], model='haydavies',
-                                             dni_extra=dni_extra, iam_back=iam_d['ground'],
+                                             dni_extra=dni_extra, iam_back=iam_r['ground'],
                                              transmission_factor=bf['transparent'] / 100)
         rear_dir = sh_b['poa_back_direct'].fillna(0).clip(lower=0)
         # diffus arrière : modèle 2D, sol non uniforme (bandes à l'ombre / au soleil)
-        beam_h = (dni_eff * cz_s).clip(lower=0).where(day, 0)
+        # diffus du ciel séparé façon Hay-Davies : la part circumsolaire suit l'ombre portée comme le direct
+        ai = (dni_eff / dni_extra).clip(0, 1).fillna(0)
+        dhi_d = w.dhi.where(day, 0)
+        beam_h = (dni_eff * cz_s + dhi_d * ai).clip(lower=0).where(day, 0)
         rg_, rs_, gnd_ = rear_irradiance_2d(rot.values, (axis_az + 90.0) % 360, zen.values, azi.values,
-                                            beam_h.values, w.dhi.where(day, 0).values, width, pitch, h_center,
+                                            beam_h.values, (dhi_d * (1 - ai)).values, width, pitch, h_center,
                                             bf['albedo_ground'], bf['transparent'] / 100)
-        rear_inc = (pd.Series(rg_ + rs_, index=w.index) * iam_d['ground'] + rear_dir).clip(lower=0).where(day, 0)
+        rear_inc = (pd.Series(rg_ * iam_r['ground'] + rs_ * iam_r['sky'], index=w.index) + rear_dir).clip(lower=0).where(day, 0)
         rear_eff = rear_inc * (1 - bf['rear_shading'] / 100)
     else:
         rear_inc = rear_eff = pd.Series(0.0, index=w.index)
