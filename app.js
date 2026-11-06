@@ -120,7 +120,7 @@ function buildForm() {
   $('#form').innerHTML = [
     section('project', 'Projet', txt('project.name', 'Nom du projet', { full: true }) + txt('project.variant', 'Variante') + txt('project.author', 'Auteur'), true),
     section('site', 'Site', num('site.lat', 'Latitude', '°N', { step: 0.0001 }) + num('site.lon', 'Longitude', '°E', { step: 0.0001 }) +
-      num('site.alt', 'Altitude', 'm') + num('site.albedo', 'Albédo du site', '', { step: 0.01, hint: 'Albédo vu par la face avant.' }) +
+      num('site.alt', 'Altitude', 'm', { hint: 'Renseignée automatiquement depuis les coordonnées (IGN RGE ALTI, ou Copernicus DEM hors de France), modifiable.' }) + num('site.albedo', 'Albédo du site', '', { step: 0.01, hint: 'Albédo vu par la face avant.' }) +
       `<div class="fld full"><div id="map"></div><div class="hint">Cliquer sur la carte ou déplacer le repère pour placer le site. Les liens de téléchargement des données du site apparaissent au-dessus de chaque fichier à déposer : la page s'ouvre dans un nouvel onglet, l'enregistrer (Ctrl+S / ⌘S) puis déposer le fichier .htm obtenu.</div></div>`, true),
     section('meteo', 'Météo', drop('tmy', '<span>TMY PVGIS 5.3 au format CSV ou JSON</span>') +
       chk('meteo.tmy_has_horizon', "Le TMY a été téléchargé avec l'horizon PVGIS (« usehorizon »)", { hint: "Lu automatiquement dans un fichier JSON. Pour un CSV, cocher si l'option horizon était active : le masque PVGIS est alors déjà dans le direct. Recommandé : TMY sans horizon + masque déposé ci-dessous." }) +
@@ -644,6 +644,26 @@ function initMap() {
   $('#sec-site').addEventListener('toggle', () => setTimeout(() => map.invalidateSize(), 50));
 }
 function setLL(ll) { S.cfg.site.lat = +ll.lat.toFixed(5); S.cfg.site.lon = +ll.lng.toFixed(5); fillForm(); onChange('site.lat'); }
+// Altitude du site : IGN RGE ALTI (France), sinon Open-Meteo (Copernicus DEM 90 m)
+let altTimer = null, altSeq = 0;
+function scheduleAltitude(delay = 600) { clearTimeout(altTimer); altTimer = setTimeout(fetchAltitude, delay); }
+async function fetchAltitude() {
+  const { lat, lon } = S.cfg.site; if (lat == null || lon == null) return;
+  const my = ++altSeq; let z = null, src = '';
+  try {
+    const r = await fetch(`https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon=${lon}&lat=${lat}&resource=ign_rge_alti_wld&zonly=true`);
+    const v = (await r.json()).elevations?.[0];
+    if (Number.isFinite(v) && v > -1000) { z = v; src = 'IGN RGE ALTI'; }
+  } catch (e) { /* service indisponible : repli */ }
+  if (z == null) {
+    try { const v = (await (await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lon}`)).json()).elevation?.[0]; if (Number.isFinite(v)) { z = v; src = 'Copernicus DEM (Open-Meteo)'; } } catch (e) { /* ignore */ }
+  }
+  if (my !== altSeq || z == null) return;
+  S.cfg.site.alt = Math.round(z);
+  const el = $('[data-path="site.alt"]'); if (el) el.value = S.cfg.site.alt;
+  onChange('site.alt', true);
+  setStatus(`Altitude du site : ${nf(S.cfg.site.alt)} m (${src}).`, 'ok', 100);
+}
 function placeMarker(ll) {
   if (!map) return;
   if (!marker) { marker = L.marker(ll, { draggable: true }).addTo(map); marker.on('dragend', () => setLL(marker.getLatLng())); }
@@ -665,6 +685,7 @@ function renderLinks() {
 let checkTimer = null;
 function onChange(path) {
   if (path === 'inverters.groups' || path === 'array.n_series') syncStrings();
+  if (path === 'site.lat' || path === 'site.lon') scheduleAltitude();
   applyVisibility(); renderDerived(); renderLinks(); save();
   clearTimeout(checkTimer); checkTimer = setTimeout(runCheck, 250);
 }
