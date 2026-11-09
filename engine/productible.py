@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.7.1"
+ENGINE_VERSION = "1.7.2"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -932,14 +932,16 @@ def check_design(pan, ond, cfg):
             alerts.append(dict(code='shading_share', level='block', title="Configurations d'ombrage électrique",
                                value=round(tot, 2), limit=100, unit='%',
                                message=f"La somme des parts de tables vaut {tot:.2f} % au lieu de 100 % : simulation bloquée."))
+    t_min = float(cfg['inverters'].get('t_min') if cfg['inverters'].get('t_min') is not None else -10.0)
+    t_txt = f"{t_min:g}".replace('-', '−')
     if pan.get('mu_voc') is not None:
-        voc_m10 = pan['voc'] + pan['mu_voc'] / 1000 * (-10 - 25)
+        voc_m10 = pan['voc'] + pan['mu_voc'] / 1000 * (t_min - 25)
     else:
-        voc_m10 = float(module_point(pan, 1000.0, -10.0)[3][0])
+        voc_m10 = float(module_point(pan, 1000.0, t_min)[3][0])
     v_str = voc_m10 * ns
     block = v_str > ond['vabsmax']
     alerts.append(dict(code='voc_m10', level='block' if block else 'ok',
-                       title='Tension à vide des chaînes à −10 °C',
+                       title=f'Tension à vide des chaînes à {t_txt} °C',
                        value=round(v_str, 1), limit=ond['vabsmax'], unit='V',
                        message=(f"{ns} × {voc_m10:.2f} V = {v_str:.0f} V "
                                 f"{'>' if block else '≤'} tension max. onduleur {ond['vabsmax']:.0f} V"
@@ -986,7 +988,7 @@ DEFAULTS = dict(
                    shading_configs=[dict(sub_in_height=None, share=100.0)],
                    axis_azimuth=0.0, max_angle=55.0, backtrack=True, axis_height=1.5),
     array=dict(n_series=27, n_strings=128),
-    inverters=dict(groups=[[4, 21], [2, 22]], t_offset=10.0, p_inj_kw=None),
+    inverters=dict(groups=[[4, 21], [2, 22]], t_offset=10.0, p_inj_kw=None, t_min=-10.0),
     bifacial=dict(enabled=True, bifaciality=None, albedo_ground=0.17, rear_shading=5.0,
                   rear_mismatch=10.0, transparent=0.0),
     thermal=dict(uc=29.0, uv=0.0),

@@ -15,7 +15,7 @@ const DEFAULTS = {
     shading_configs: [{ sub_in_height: null, share: 100 }], fields: [],
     axis_azimuth: 0, max_angle: 55, backtrack: true, axis_height: 1.5 },
   array: { n_series: null, n_strings: 0 },
-  inverters: { groups: [[null, null]], t_offset: 10, p_inj_kw: null },
+  inverters: { groups: [[null, null]], t_offset: 10, p_inj_kw: null, t_min: -10 },
   bifacial: { enabled: true, bifaciality: null, albedo_ground: 0.17, rear_shading: 5, rear_mismatch: 10, transparent: 0 },
   thermal: { uc: 29, uv: 0 },
   iam: { mode: 'fresnel', n: 1.526, n_ar: 1.29 },
@@ -173,7 +173,8 @@ function buildForm() {
         <label class="mini filebtn">+ Ajouter un onduleur (.OND)<input type="file" accept=".ond,.OND,.htm,.html,.txt" hidden data-lib="ond"></label></div>` +
       `<div class="fld full groups" data-show="structure.type!=roof"><label>Groupes d'onduleurs<i>nb onduleurs × chaînes par onduleur</i></label><div id="groups"></div>
       <button type="button" class="mini" id="addGroup">+ Ajouter un groupe</button></div>` +
-      num('inverters.t_offset', 'Offset de température autour des onduleurs', '°C', { step: 0.5, full: true, hint: 'Ajouté à la température ambiante pour le déclassement en puissance (courbe Pmax / Pnom / PLim du .OND).' }) +
+      num('inverters.t_offset', 'Offset de température autour des onduleurs', '°C', { step: 0.5, hint: 'Ajouté à la température ambiante pour le déclassement en puissance (courbe Pmax / Pnom / PLim du .OND).' }) +
+      num('inverters.t_min', 'Température minimale du site', '°C', { step: 1, hint: 'Pour la vérification de la tension à vide des chaînes (Voc à cette température ≤ tension max. de l\'onduleur). −10 °C par défaut.' }) +
       num('inverters.p_inj_kw', "Limite de puissance d'injection", 'kW', { ph: 'aucune', full: true })),
     section('bifacial', 'Bifacial', chk('bifacial.enabled', 'Prendre en compte la face arrière') +
       num('bifacial.albedo_ground', 'Albédo du sol', '', { step: 0.01 }) + num('bifacial.rear_shading', 'Ombrage arrière', '%') +

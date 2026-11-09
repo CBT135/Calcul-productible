@@ -87,7 +87,7 @@ Les noms de colonnes sont reconnus automatiquement (GTI, POA, irradiance plan, t
 
 | Vérification | Règle | Effet |
 |---|---|---|
-| Tension à vide des chaînes à −10 °C | Ns × Voc(−10 °C) ≤ tension max. onduleur (`VAbsMax`) | **Bloquant** |
+| Tension à vide des chaînes à la température minimale du site (−10 °C par défaut, réglable dans la section Onduleurs) | Ns × Voc(Tmin) ≤ tension max. onduleur (`VAbsMax`) | **Bloquant** |
 | Tension MPP des chaînes à 60 °C | Ns × Vmp(60 °C, 1 000 W/m²) ≥ tension MPPT mini (`VMppMin`) | Alerte |
 | Courant DC | chaînes par onduleur × Isc ≤ courant DC max. (`IMaxDC`) | Alerte |
 
