@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.7.0"
+ENGINE_VERSION = "1.7.1"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -99,15 +99,12 @@ def parse_pan(text):
     # paramètres une diode IL_ref, I0_ref (méthode PVsyst : Isc et Voc imposés)
     nV = pan['gamma'] * pan['ns'] * K_B * 298.15 / Q_E
 
-    def eqs(x):
-        il, ln_i0 = x
-        i0 = math.exp(ln_i0)
-        return [il - i0 * (math.exp(pan['voc'] / nV) - 1) - pan['voc'] / pan['rsh'],
-                il - i0 * (math.exp(pan['isc'] * pan['rs'] / nV) - 1)
-                - pan['isc'] * pan['rs'] / pan['rsh'] - pan['isc']]
-
-    il, ln_i0 = fsolve(eqs, [pan['isc'], math.log(1e-11)])
-    pan['IL_ref'], pan['I0_ref'] = float(il), float(math.exp(ln_i0))
+    # les deux conditions (I = 0 à Voc, I = Isc à V = 0) sont linéaires en IL et I0 : solution exacte
+    # (un solveur itératif pouvait rester bloqué sur sa valeur initiale et surestimer fortement la puissance)
+    ev, es = math.exp(pan['voc'] / nV), math.exp(pan['isc'] * pan['rs'] / nV)
+    i0 = (pan['isc'] * (1 + pan['rs'] / pan['rsh']) - pan['voc'] / pan['rsh']) / (ev - es)
+    il = pan['voc'] / pan['rsh'] + i0 * (ev - 1)
+    pan['IL_ref'], pan['I0_ref'] = float(il), float(i0)
     return pan
 
 
@@ -918,6 +915,16 @@ def _combine_fields(cfg, files, runs, alerts):
 def check_design(pan, ond, cfg):
     ns = int(cfg['array']['n_series'])
     alerts = []
+    # cohérence du modèle à une diode avec la puissance nominale du .PAN
+    try:
+        pm0 = float(module_point(pan, [1000.0], 25.0)[0][0])
+        if abs(pm0 / pan['pnom'] - 1) > 0.03:
+            alerts.append(dict(code='pan_model', level='warn', title='Modèle du module', value=round(pm0, 1),
+                               limit=pan['pnom'], unit='W',
+                               message=f"Le modèle à une diode donne {pm0:.1f} W à STC pour {pan['pnom']:.0f} Wc au .PAN : "
+                                       "vérifier les paramètres Rs, Rsh et γ du fichier."))
+    except Exception:
+        pass
     confs = cfg['structure'].get('shading_configs') or []
     if confs:
         tot = sum(float(c.get('share') or 0) for c in confs)
