@@ -7,7 +7,11 @@ Application web d'estimation de productible photovoltaïque au pas horaire, qui 
 ## Utilisation
 
 1. **Site** : saisir les coordonnées, ou cliquer sur la carte. Les liens générés ouvrent directement les données PVGIS et Global Solar Atlas pour ce point. Enregistrer chaque page (Ctrl+S / ⌘S) puis déposer le fichier dans l'application.
-2. **Météo** : déposer le TMY PVGIS 5.3 (CSV ou JSON), de préférence **sans horizon** (`usehorizon=0`), le masque étant appliqué par l'application. Déposer ou coller le JSON Global Solar Atlas pour recaler le TMY (mensuel ou annuel).
+2. **Météo** : déposer le TMY PVGIS 5.3 (CSV ou JSON), de préférence **sans horizon** (`usehorizon=0`), le masque étant appliqué par l'application. Le TMY peut être recalé, au pas mensuel ou annuel (avec ou sans la température), sur une base de référence :
+   - **Global Solar Atlas** : déposer ou coller le JSON ;
+   - **base météo mensuelle** : déposer un CSV de moyennes mensuelles long terme, par exemple Solargis Prospect « LTA P1M » au format PVsyst, ou tout CSV avec une colonne `Month` et des colonnes GHI, DIF (ou DHI) et T. Au dépôt, le recalage sur cette base est coché et celui sur Global Solar Atlas décoché.
+
+   Une seule base sert au recalage. Les cumuls sont en kWh/m² ; des valeurs journalières (moins de 12 kWh/m²) sont converties en cumuls mensuels. Les valeurs restent modifiables dans le tableau.
 3. **Masque lointain** (optionnel) : CSV `Azimut;Hauteur` (0 = Sud, Est négatif) ou fichier horizon PVGIS.
 4. **Modules et onduleurs** : déposer les fichiers `.PAN` et `.OND` (format texte), puis saisir le nombre de modules en série et les groupes d'onduleurs (nombre d'onduleurs × chaînes par onduleur).
 5. **Structure** (section placée avant les modules) : sheds fixes, Est-Ouest, tracker mono-axe ou **toiture** ; ombrage électrique « selon les chaînes ». Tous les azimuts sont saisis en convention **0 = Sud** (0 = Sud, Est négatif, Ouest positif) :
@@ -80,7 +84,7 @@ Les noms de colonnes sont reconnus automatiquement (GTI, POA, irradiance plan, t
 
 ## Méthode de calcul (pas horaire)
 
-- **Météo** : TMY PVGIS 5.3 (SARAH-3), recalage optionnel sur Global Solar Atlas. Le diffus est multiplié mois par mois (ou sur l'année). Le direct est ajusté sur l'indice de clarté kb = DNI / DNI ciel clair, transformé en kb^g : les heures claires restent claires et les heures couvertes restent couvertes, seules les heures intermédiaires s'éclaircissent ou s'assombrissent. Une simple multiplication du direct gonflait les heures déjà claires jusqu'au plafond de ciel clair et surestimait l'écrêtage onduleur. Le GHI est recomposé (DIF + DNI × cos z). Le DNI est plafonné à 1,05 × le ciel clair, avec redistribution de l'énergie écrêtée pour conserver les cumuls.
+- **Météo** : TMY PVGIS 5.3 (SARAH-3), recalage optionnel sur Global Solar Atlas ou sur une base météo mensuelle (Solargis…). Le diffus est multiplié mois par mois (ou sur l'année). Le direct est ajusté sur l'indice de clarté kb = DNI / DNI ciel clair, transformé en kb^g : les heures claires restent claires et les heures couvertes restent couvertes, seules les heures intermédiaires s'éclaircissent ou s'assombrissent. Une simple multiplication du direct gonflait les heures déjà claires jusqu'au plafond de ciel clair et surestimait l'écrêtage onduleur. Le GHI est recomposé (DIF + DNI × cos z). Le DNI est plafonné à 1,05 × le ciel clair, avec redistribution de l'énergie écrêtée pour conserver les cumuls.
 - **Masque lointain** : le direct est coupé sous la ligne d'horizon. Le diffus isotrope et la bande d'horizon sont réduits d'un facteur intégré sur la voûte céleste vue par le plan.
 - **Transposition** : Perez (isotrope, circumsolaire et bande d'horizon séparés).
 - **Ombrages proches** : modèle 1D de rangées infinies (`shaded_fraction1d`), première rangée non ombrée, perte de vue du ciel pour le diffus.

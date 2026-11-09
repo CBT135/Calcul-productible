@@ -2,7 +2,7 @@
 Calcul productible - moteur de simulation PV au pas horaire, basé sur pvlib.
 
 Chaîne de calcul (pas horaire) :
-  TMY PVGIS (CSV/JSON) -> recalage optionnel Global Solar Atlas (mensuel ou annuel, GHI/DIF, T° en option)
+  TMY PVGIS (CSV/JSON) -> recalage optionnel sur Global Solar Atlas ou une base mensuelle (Solargis…), GHI/DIF, T° en option
   -> position solaire -> masque lointain (direct + facteur diffus) -> transposition Perez
   -> ombrages proches 1D entre rangées (sheds fixes, trackers mono-axe, Est-Ouest) + perte de vue du ciel
   -> salissure -> IAM -> face arrière (modèle 2D, sol non uniforme) -> modèle une diode PVsyst (.PAN) + thermique PVsyst
@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.6.0"
+ENGINE_VERSION = "1.7.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -252,6 +252,68 @@ def parse_gsa(text):
     if not out['ghi'] or len(out['ghi']) != 12:
         raise ValueError("JSON Global Solar Atlas : 12 valeurs mensuelles de GHI attendues")
     return out
+
+
+_MOIS = {'jan': 1, 'janv': 1, 'feb': 2, 'fev': 2, 'fevr': 2, 'mar': 3, 'mars': 3, 'apr': 4, 'avr': 4, 'may': 5, 'mai': 5,
+         'jun': 6, 'juin': 6, 'jul': 7, 'juil': 7, 'aug': 8, 'aou': 8, 'aout': 8, 'sep': 9, 'sept': 9, 'oct': 10,
+         'nov': 11, 'dec': 12}
+_JOURS = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def parse_monthly_db(text):
+    """Base météo mensuelle long terme (CSV Solargis Prospect « LTA P1M pvsyst », ou tout CSV avec une colonne
+    mois et des colonnes GHI, DIF/DHI, T). Renvoie le même format que parse_gsa, plus la source et les métadonnées."""
+    lines = text.replace('\r', '').split('\n')
+    meta = {}
+    for l in lines:
+        m = re.match(r'#\s*([^:]+):\s*(.+)', l)
+        if m:
+            meta[_norm(m.group(1))] = m.group(2).strip()
+    hi = next((i for i, l in enumerate(lines) if re.match(r'\s*(month|mois)\b', _norm(l))), None)
+    if hi is None:
+        raise ValueError('Base mensuelle : ligne d\'en-tête « Month » introuvable')
+    sep = ';' if ';' in lines[hi] else ('\t' if '\t' in lines[hi] else ',')
+    head = [_norm(h) for h in lines[hi].split(sep)]
+    def col(pat):
+        return next((j for j, h in enumerate(head) if re.match(pat, h)), None)
+    cj = dict(ghi=col(r'(ghi|gh\b|glob)'), dif=col(r'(dif|dhi)'), dni=col(r'(dni|bn)'), temp=col(r'(t24|temp|tamb|t2m|ta\b|t_?air)'),
+              alb=col(r'alb'), wind=col(r'(ws|wind|vent)'))
+    if cj['ghi'] is None:
+        raise ValueError('Base mensuelle : colonne GHI introuvable')
+    vals = {k: [None] * 12 for k in cj}
+    for l in lines[hi + 1:]:
+        f = [x.strip() for x in l.split(sep)]
+        if not f or not f[0]:
+            continue
+        key = re.sub(r'[^a-z0-9]', '', _norm(f[0]))
+        m = int(key) if key.isdigit() and 1 <= int(key) <= 12 else _MOIS.get(key[:4], _MOIS.get(key[:3]))
+        if not m:
+            continue
+        for k, j in cj.items():
+            if j is not None and j < len(f) and f[j] not in ('', '-'):
+                try:
+                    vals[k][m - 1] = float(f[j].replace(',', '.'))
+                except ValueError:
+                    pass
+    if any(v is None for v in vals['ghi']):
+        raise ValueError('Base mensuelle : 12 valeurs mensuelles de GHI attendues')
+    def monthly_sum(v):      # valeurs journalières (kWh/m²/j) -> cumuls mensuels
+        if v and all(x is not None for x in v) and max(v) < 12:
+            return [x * d for x, d in zip(v, _JOURS)]
+        return v
+    ghi, dif = monthly_sum(vals['ghi']), monthly_sum(vals['dif']) if vals['dif'][0] is not None else None
+    dni = monthly_sum(vals['dni']) if vals['dni'][0] is not None else None
+    src = 'Solargis' if 'solargis' in text.lower() else 'Meteonorm' if 'meteonorm' in text.lower() else 'Base mensuelle'
+    temp = vals['temp'] if vals['temp'][0] is not None else None
+    def num(k):
+        m = re.search(r'[-+]?\d+(?:[.,]\d+)?', meta.get(k) or '')
+        return float(m.group(0).replace(',', '.')) if m else None
+    return dict(source=src, ghi=ghi, dif=dif, temp=temp, dni=dni, albedo=vals['alb'] if vals['alb'][0] is not None else None,
+                wind=vals['wind'] if vals['wind'][0] is not None else None,
+                ghi_year=sum(ghi), dif_year=sum(dif) if dif else None, dni_year=sum(dni) if dni else None,
+                temp_year=float(np.mean(temp)) if temp else None,
+                site=meta.get('site name'), lat=num('latitude'), lon=num('longitude'),
+                elev=num('elevation'), issued=meta.get('issued'), report=meta.get('report number'))
 
 
 def parse_pvgis_monthly(text):
@@ -977,7 +1039,8 @@ def _simulate_one(cfg_in, files):
     meteo_rows, gsa = None, None
     w_raw = w.copy()
     if files.get('gsa') and cfg['meteo'].get('gsa_mode', 'none') != 'none':
-        gsa = parse_gsa(files['gsa']) if isinstance(files['gsa'], str) else files['gsa']
+        g0 = files['gsa']
+        gsa = (parse_monthly_db(g0) if not g0.lstrip().startswith('{') else parse_gsa(g0)) if isinstance(g0, str) else g0
         w, meteo_rows = gsa_correct(w, sp, cz, gsa, cfg['meteo']['gsa_mode'],
                                     bool(cfg['meteo'].get('gsa_align_temp')))
     hz = parse_horizon(files['horizon']) if files.get('horizon') and cfg['horizon'].get('use', True) else None
@@ -1284,6 +1347,7 @@ def _simulate_one(cfg_in, files):
     res = dict(ok=True, blocked=False, engine=ENGINE_VERSION, pvlib=pvlib.__version__,
                config=cfg, summary=summary, monthly=monthly, losses=loss_list, alerts=alerts,
                p90=p90, lifetime=lifetime, faces=face_info, meteo_correction=meteo_rows,
+               meteo_ref=(gsa or {}).get('source') or 'Global Solar Atlas' if meteo_rows else None,
                tmy_info=tmy_info, gsa=gsa, horizon=hz.tolist() if hz is not None else None,
                sunpaths=sunpaths, pan=_public(pan), ond=_public(ond),
                daily_kwh=[float(x) for x in (p_grid.groupby(p_grid.index.dayofyear).sum() / 1000).values])
@@ -1922,7 +1986,7 @@ def export_xlsx(res):
         rows = [[m['mois'], m['ghi_tmy'], m['ghi_cible'], m['ghi_corrige'], m['dif_tmy'], m['dif_cible'],
                  m['dif_corrige'], m['k_direct'], m['k_diffus'], m.get('dT'), m['t_moy'], m['heures_ecretees']]
                 for m in res['meteo_correction']]
-        table(ws, 1, ['Mois', 'GHI TMY', 'GHI cible GSA', 'GHI corrigé', 'DIF TMY', 'DIF cible', 'DIF corrigé',
+        table(ws, 1, ['Mois', 'GHI TMY', 'GHI cible (' + str(res.get('meteo_ref') or 'GSA') + ')', 'GHI corrigé', 'DIF TMY', 'DIF cible', 'DIF corrigé',
                       'k direct', 'k diffus', 'ΔT appliqué', 'T moy.', 'h écrêtées'], rows,
               [None] + ['0.0'] * 6 + ['0.000', '0.000', '0.00', '0.0', '0'])
     else:

@@ -7,7 +7,7 @@
 const DEFAULTS = {
   project: { name: '', variant: 'Var0', author: '' },
   site: { lat: null, lon: null, alt: null, albedo: 0.20 },
-  meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: true },
+  meteo: { tmy_has_horizon: false, gsa_mode: 'monthly', gsa_align_temp: true, use_gsa: true, use_mdb: false },
   module: { lowlight_cal: 'auto' },
   horizon: { use: true },
   structure: { type: 'fixed', tilt: null, azimuth: 0, az_convention: 'sud0', pitch: null, width: null, height: null, n_rows: null,
@@ -36,6 +36,7 @@ const FILES = {
   pan: { label: 'Module .PAN', accept: '.pan,.PAN', req: true },
   ond: { label: 'Onduleur .OND', accept: '.ond,.OND', req: true },
   gsa: { label: 'Global Solar Atlas', accept: '.json,.htm,.html,.txt', req: false },
+  mdb: { label: 'Base météo mensuelle', accept: '.csv,.txt', req: false },
   horizon: { label: 'Masque lointain', accept: '.csv,.txt,.hor,.htm,.html', req: false },
   pvgis_monthly: { label: 'PVGIS mensuel (P90)', accept: '.csv,.txt,.htm,.html', req: false },
 };
@@ -58,7 +59,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const nf = (v, d = 0) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pf = (v, d = 1) => (v == null || isNaN(v) ? '–' : nf(100 * v, d) + ' %');
 
-const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {}, ext: null, exFile: null };
+const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, mdb: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {}, ext: null, exFile: null };
 
 // ------------------------------------------------------------------ worker
 const worker = new Worker('worker.js');
@@ -125,14 +126,17 @@ function buildForm() {
       `<div class="fld full"><div id="map"></div><div class="hint">Cliquer sur la carte ou déplacer le repère pour placer le site. Les liens de téléchargement des données du site apparaissent au-dessus de chaque fichier à déposer : la page s'ouvre dans un nouvel onglet, l'enregistrer (Ctrl+S / ⌘S) puis déposer le fichier .htm obtenu.</div></div>`, true),
     section('meteo', 'Météo', drop('tmy', '<span>TMY PVGIS 5.3 au format CSV ou JSON</span>') +
       chk('meteo.tmy_has_horizon', "Le TMY a été téléchargé avec l'horizon PVGIS (« usehorizon »)", { hint: "Lu automatiquement dans un fichier JSON. Pour un CSV, cocher si l'option horizon était active : le masque PVGIS est alors déjà dans le direct. Recommandé : TMY sans horizon + masque déposé ci-dessous." }) +
-      ''),
+      sel('meteo.gsa_mode', 'Recalage du TMY sur la base de référence', [['monthly', 'Mensuel (GHI et DIF, 12 mois)'], ['annual', 'Annuel (GHI et DIF)']], { full: true, hint: 'La base de référence est Global Solar Atlas ou la base météo mensuelle déposée plus bas (une seule à la fois).' }) +
+      chk('meteo.gsa_align_temp', 'Recaler aussi la température mensuelle sur la base de référence')),
     section('horizon', 'Masque lointain', drop('horizon', '<span>CSV Azimut;Hauteur (0 = Sud, Est &lt; 0) ou horizon PVGIS</span>') +
       chk('horizon.use', 'Appliquer le masque (direct coupé sous l\'horizon, diffus réduit)')),
-    section('gsa', 'Global Solar Atlas', sel('meteo.gsa_mode', 'Recalage du TMY', [['monthly', 'Mensuel (GHI et DIF, 12 mois)'], ['annual', 'Annuel (GHI et DIF)'], ['none', 'Aucun (TMY brut)']], { full: true }) +
-      chk('meteo.gsa_align_temp', 'Recaler aussi la température mensuelle sur GSA') +
+    section('gsa', 'Global Solar Atlas', chk('meteo.use_gsa', 'Recaler le TMY sur Global Solar Atlas') +
       drop('gsa', '<span>JSON de l\'API GSA (.json ou page .htm enregistrée), ou coller le texte ci-dessous</span>') +
       `<div class="fld full"><textarea id="gsaPaste" placeholder='Coller ici la réponse JSON de https://api.globalsolaratlas.info/data/lta?loc=lat,lon'></textarea></div>
       <div class="fld full" id="gsaTable"></div>`),
+    section('mdb', 'Base météo mensuelle', chk('meteo.use_mdb', 'Recaler le TMY sur cette base mensuelle', { hint: 'Cochée automatiquement au dépôt d\'une base : le recalage sur Global Solar Atlas est alors décoché.' }) +
+      drop('mdb', '<span>CSV de moyennes mensuelles long terme : Solargis Prospect (LTA P1M, format PVsyst) ou tout CSV avec une colonne Month et des colonnes GHI, DIF, T</span>') +
+      '<div class="fld full" id="mdbTable"></div>'),
     section('structure', 'Structure', `<div class="fld full"><label>Type de structure</label><div class="seg" id="stype">
         <button type="button" data-v="fixed">Sheds fixes</button><button type="button" data-v="ew">Est-Ouest</button><button type="button" data-v="tracker">Tracker mono-axe</button><button type="button" data-v="roof">Toiture</button></div></div>` +
       `<div class="fld full" data-show="structure.type==roof"><div id="roofFields"></div>
@@ -537,6 +541,7 @@ async function readFile(key, file) {
   if (text.includes('�')) text = new TextDecoder('windows-1252').decode(buf);
   text = unwrapHtml(text);
   if (key === 'gsa') return loadGsaText(text, file.name);
+  if (key === 'mdb') return loadMdbText(text, file.name);
   S.files[key] = text; S.names[key] = file.name; S.info[key] = null;
   await parseFile(key); save(); refreshAll();
 }
@@ -566,7 +571,60 @@ function unwrapHtml(text) {
   const out = pres.length ? pres.sort((a, b) => b.length - a.length)[0] : (doc.body ? doc.body.textContent : text);
   return out.replace(/\u00a0/g, ' ').trim() + '\n';
 }
-function clearFile(key) { delete S.files[key]; delete S.names[key]; delete S.info[key]; if (key === 'gsa') S.gsa = null; save(); refreshAll(); }
+function clearFile(key) {
+  delete S.files[key]; delete S.names[key]; delete S.info[key];
+  if (key === 'gsa') S.gsa = null;
+  if (key === 'mdb') { S.mdb = null; if (S.cfg.meteo.use_mdb) { S.cfg.meteo.use_mdb = false; S.cfg.meteo.use_gsa = true; fillForm(); } }
+  save(); refreshAll();
+}
+// Base météo mensuelle long terme (Solargis Prospect « LTA P1M pvsyst » ou CSV générique)
+const MOIS_KEYS = { jan: 1, janv: 1, feb: 2, fev: 2, fevr: 2, mar: 3, mars: 3, apr: 4, avr: 4, may: 5, mai: 5, jun: 6, juin: 6, jul: 7, juil: 7, aug: 8, aou: 8, aout: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+const JOURS_MOIS = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const normTxt = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+function parseMonthlyDb(text) {
+  const lines = text.replace(/\r/g, '').split('\n'), meta = {};
+  lines.forEach((l) => { const m = l.match(/^#\s*([^:]+):\s*(.+)$/); if (m) meta[normTxt(m[1])] = m[2].trim(); });
+  const hi = lines.findIndex((l) => /^\s*(month|mois)\b/.test(normTxt(l)));
+  if (hi < 0) throw new Error('ligne d\'en-tête « Month » introuvable');
+  const sep = lines[hi].includes(';') ? ';' : lines[hi].includes('\t') ? '\t' : ',';
+  const head = lines[hi].split(sep).map(normTxt);
+  const col = (re) => head.findIndex((h) => re.test(h));
+  const cj = { ghi: col(/^(ghi|gh\b|glob)/), dif: col(/^(dif|dhi)/), dni: col(/^(dni|bn)/), temp: col(/^(t24|temp|tamb|t2m|ta\b|t_?air)/), alb: col(/^alb/), wind: col(/^(ws|wind|vent)/) };
+  if (cj.ghi < 0) throw new Error('colonne GHI introuvable');
+  const v = Object.fromEntries(Object.keys(cj).map((k) => [k, Array(12).fill(null)]));
+  for (const l of lines.slice(hi + 1)) {
+    const f = l.split(sep).map((x) => x.trim()); if (!f[0]) continue;
+    const key = normTxt(f[0]).replace(/[^a-z0-9]/g, '');
+    const m = /^\d+$/.test(key) && +key >= 1 && +key <= 12 ? +key : (MOIS_KEYS[key.slice(0, 4)] || MOIS_KEYS[key.slice(0, 3)]);
+    if (!m) continue;
+    for (const [k, j] of Object.entries(cj)) if (j >= 0 && f[j] !== undefined && f[j] !== '' && f[j] !== '-') { const x = Number(f[j].replace(',', '.')); if (Number.isFinite(x)) v[k][m - 1] = x; }
+  }
+  if (v.ghi.some((x) => x == null)) throw new Error('12 valeurs mensuelles de GHI attendues');
+  const full = (a) => a.every((x) => x != null);
+  const msum = (a) => (full(a) && Math.max(...a) < 12 ? a.map((x, i) => x * JOURS_MOIS[i]) : a);
+  const sum = (a) => a.reduce((p, q) => p + q, 0);
+  const ghi = msum(v.ghi), dif = full(v.dif) ? msum(v.dif) : null, dni = full(v.dni) ? msum(v.dni) : null, temp = full(v.temp) ? v.temp : null;
+  const num = (k) => { const m = (meta[k] || '').match(/[-+]?\d+(?:[.,]\d+)?/); return m ? Number(m[0].replace(',', '.')) : null; };
+  const low = text.toLowerCase();
+  return { source: low.includes('solargis') ? 'Solargis' : low.includes('meteonorm') ? 'Meteonorm' : 'Base mensuelle',
+    ghi, dif, dni, temp, albedo: full(v.alb) ? v.alb : null, wind: full(v.wind) ? v.wind : null,
+    ghi_year: sum(ghi), dif_year: dif ? sum(dif) : null, dni_year: dni ? sum(dni) : null, temp_year: temp ? sum(temp) / 12 : null,
+    site: meta['site name'] || null, lat: num('latitude'), lon: num('longitude'), elev: num('elevation'), issued: meta.issued || null, report: meta['report number'] || null };
+}
+function loadMdbText(text, name) {
+  try {
+    S.mdb = parseMonthlyDb(text);
+    if (!S.mdb.dif) throw new Error('colonne de diffus (DIF ou DHI) introuvable');
+    S.names.mdb = name; S.cfg.meteo.use_mdb = true; S.cfg.meteo.use_gsa = false;
+    fillForm(); save(); refreshAll();
+  } catch (e) { $('#info-mdb').textContent = '⚠ Base météo mensuelle illisible : ' + e.message; $('#info-mdb').style.color = 'var(--block)'; }
+}
+function meteoRef() {
+  const m = S.cfg.meteo;
+  if (m.use_mdb && S.mdb) return S.mdb;
+  if (m.use_gsa && S.gsa) return Object.assign({ source: 'Global Solar Atlas' }, S.gsa);
+  return null;
+}
 
 function loadGsaText(text, name) {
   try {
@@ -583,7 +641,7 @@ function loadGsaText(text, name) {
 function renderFileBoxes() {
   for (const key of Object.keys(FILES)) {
     const box = $(`[data-drop="${key}"]`); if (!box) continue;
-    const loaded = key === 'gsa' ? !!S.gsa : !!S.files[key];
+    const loaded = key === 'gsa' ? !!S.gsa : key === 'mdb' ? !!S.mdb : !!S.files[key];
     box.classList.toggle('loaded', loaded);
     $('.dtxt', box).innerHTML = loaded ? `<b>${esc(S.names[key] || 'chargé')}</b><span>${fileSummary(key)}</span>` : `<b>Déposer ou choisir un fichier</b>${$('.dtxt', box).dataset.hint}`;
     $('.ico', box).textContent = loaded ? '✓' : '⇪';
@@ -593,10 +651,11 @@ function renderFileBoxes() {
     const info = $('#info-' + key);
     if (info && !(S.info[key] && S.info[key].error)) { info.textContent = ''; info.style.color = ''; }
   }
-  renderGsaTable();
+  renderGsaTable(); renderMdbTable();
 }
 function fileSummary(key) {
   const i = S.info[key];
+  if (key === 'mdb' && S.mdb) return `${esc(S.mdb.source)}${S.mdb.issued ? ' · ' + esc(S.mdb.issued.slice(0, 10)) : ''} · GHI ${nf(S.mdb.ghi_year, 1)} · DIF ${nf(S.mdb.dif_year, 1)} kWh/m²${S.mdb.temp_year != null ? ' · T ' + nf(S.mdb.temp_year, 1) + ' °C' : ''}`;
   if (key === 'gsa' && S.gsa) return `GHI ${nf(S.gsa.ghi.reduce((a, b) => a + b, 0), 1)} · DIF ${nf(S.gsa.dif.reduce((a, b) => a + b, 0), 1)} kWh/m²`;
   if (!i) return S.ready ? 'lecture…' : 'lecture dès que le moteur est prêt';
   if (i.error) return 'erreur de lecture';
@@ -622,6 +681,23 @@ function renderGsaTable() {
     const [k, i] = el.dataset.gsa.split(','); S.gsa[k][+i] = Number(el.value) || 0;
     if (k === 'ghi') S.gsa.ghi_year = S.gsa.ghi.reduce((a, b) => a + b, 0); else S.gsa.dif_year = S.gsa.dif.reduce((a, b) => a + b, 0);
     save(); renderGsaTable();
+  }));
+}
+
+function renderMdbTable() {
+  const box = $('#mdbTable'); if (!box) return;
+  const d = S.mdb; if (!d) { box.innerHTML = ''; return; }
+  const tmy = S.info.tmy && !S.info.tmy.error ? S.info.tmy : null, sum = (a) => a.reduce((p, q) => p + q, 0);
+  box.innerHTML = `<table class="mtable"><tr><th>Mois</th><th>GHI</th><th>DIF</th><th>T</th>${tmy ? '<th>GHI TMY</th><th>Écart</th>' : ''}</tr>` +
+    MONTHS.map((m, i) => `<tr><td>${m}</td><td><input type="number" step="0.1" value="${(+d.ghi[i]).toFixed(1)}" data-mdb="ghi,${i}"></td>
+      <td><input type="number" step="0.1" value="${(+d.dif[i]).toFixed(1)}" data-mdb="dif,${i}"></td><td>${d.temp ? nf(d.temp[i], 1) : '–'}</td>
+      ${tmy ? `<td>${nf(tmy.ghi[i], 1)}</td><td>${pf(d.ghi[i] / tmy.ghi[i] - 1, 0)}</td>` : ''}</tr>`).join('') +
+    `<tr><td><b>Année</b></td><td><b>${nf(sum(d.ghi), 1)}</b></td><td><b>${nf(sum(d.dif), 1)}</b></td><td>${d.temp_year != null ? nf(d.temp_year, 1) : '–'}</td>
+      ${tmy ? `<td><b>${nf(sum(tmy.ghi), 1)}</b></td><td>${pf(sum(d.ghi) / sum(tmy.ghi) - 1, 1)}</td>` : ''}</tr></table>
+      <div class="hint">${esc(d.source)}${d.site ? ' · ' + esc(d.site) : ''}${d.lat != null ? ` · ${nf(d.lat, 4)} / ${nf(d.lon, 4)}` : ''}${d.report ? ' · rapport ' + esc(d.report) : ''}. Cumuls mensuels en kWh/m², modifiables.</div>`;
+  $$('[data-mdb]', box).forEach((el) => el.addEventListener('change', () => {
+    const [k, i] = el.dataset.mdb.split(','); d[k][+i] = Number(el.value) || 0;
+    d[k + '_year'] = d[k].reduce((p, q) => p + q, 0); save(); renderMdbTable(); renderFileBoxes();
   }));
 }
 
@@ -687,6 +763,9 @@ let checkTimer = null;
 function onChange(path) {
   if (path === 'inverters.groups' || path === 'array.n_series') syncStrings();
   if (path === 'site.lat' || path === 'site.lon') scheduleAltitude();
+  // une seule base de référence pour le recalage du TMY
+  if (path === 'meteo.use_mdb' && S.cfg.meteo.use_mdb && S.cfg.meteo.use_gsa) { S.cfg.meteo.use_gsa = false; fillForm(); }
+  if (path === 'meteo.use_gsa' && S.cfg.meteo.use_gsa && S.cfg.meteo.use_mdb) { S.cfg.meteo.use_mdb = false; fillForm(); }
   applyVisibility(); renderDerived(); renderLinks(); save();
   clearTimeout(checkTimer); checkTimer = setTimeout(runCheck, 250);
 }
@@ -721,8 +800,9 @@ function renderDerived() {
   const ninv = c.inverters.groups.reduce((a, g) => a + g[0], 0);
   const sums = {
     project: c.project.name ? `${c.project.name} – ${c.project.variant}` : 'à renseigner', site: c.site.lat == null ? 'à renseigner' : `${nf(c.site.lat, 4)} / ${nf(c.site.lon, 4)}`,
-    meteo: S.files.tmy ? `TMY ✓${c.meteo.tmy_has_horizon ? ' · horizon PVGIS inclus' : ''}` : 'TMY manquant',
-    gsa: c.meteo.gsa_mode === 'none' ? 'sans recalage' : (S.gsa ? `${c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'} ✓` : 'données manquantes'),
+    meteo: S.files.tmy ? `TMY ✓${c.meteo.tmy_has_horizon ? ' · horizon PVGIS inclus' : ''} · recalage ${meteoRef() ? `${c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'} sur ${meteoRef().source}` : 'aucun'}` : 'TMY manquant',
+    gsa: !c.meteo.use_gsa ? (S.gsa ? 'chargé, non utilisé' : 'non utilisé') : (S.gsa ? 'recalage ✓' : 'données manquantes'),
+    mdb: S.mdb ? (c.meteo.use_mdb ? `${S.mdb.source} · recalage ✓` : `${S.mdb.source} · non utilisé`) : (c.meteo.use_mdb ? 'données manquantes' : 'aucune'),
     horizon: S.files.horizon ? (c.horizon.use ? 'appliqué' : 'désactivé') : 'aucun',
     module: roof ? (nmod ? `${nf(rsum('kwc'), 2)} kWc · ${nf(nmod)} modules` : 'à renseigner') : !(c.array.n_series > 0) ? 'à renseigner' : pan ? `${nf(nmod * pan.pnom / 1000, 1)} kWc · ${c.array.n_series} × ${c.array.n_strings}` : `${c.array.n_series} × ${c.array.n_strings}`,
     inverter: roof ? (rsum('ninv') ? `${rsum('ninv')} onduleur(s) · ${nf(rsum('kva'), 1)} kVA` : 'à renseigner') : !(ninv > 0) ? 'à renseigner' : ond ? `${ninv} × ${nf(ond.pmax / 1000)} kW · DC/AC ${pan ? nf(nmod * pan.pnom / (ninv * ond.pmax), 2) : '–'}` : `${ninv} onduleurs`,
@@ -771,7 +851,10 @@ function localAlerts() {
   const out = []; const c = S.cfg;
   const miss = missingFields();
   if (miss.length) out.push({ level: 'block', title: 'Champs à renseigner', message: miss.join(', ') + '.' });
-  if (c.meteo.gsa_mode !== 'none' && !S.gsa) out.push({ level: 'warn', title: 'Recalage GSA demandé', message: 'Aucune donnée Global Solar Atlas chargée : le TMY sera utilisé sans recalage.' });
+  if (c.meteo.use_gsa && !c.meteo.use_mdb && !S.gsa) out.push({ level: 'warn', title: 'Recalage GSA demandé', message: 'Aucune donnée Global Solar Atlas chargée : le TMY sera utilisé sans recalage.' });
+  if (c.meteo.use_mdb && !S.mdb) out.push({ level: 'warn', title: 'Recalage sur la base mensuelle demandé', message: 'Aucune base météo mensuelle chargée : le TMY sera utilisé sans recalage.' });
+  if (c.meteo.use_mdb && S.mdb && S.mdb.lat != null && c.site.lat != null && (Math.abs(S.mdb.lat - c.site.lat) > 0.05 || Math.abs(S.mdb.lon - c.site.lon) > 0.05))
+    out.push({ level: 'warn', title: 'Coordonnées de la base mensuelle', message: `La base ${S.mdb.source} a été produite pour ${nf(S.mdb.lat, 3)} / ${nf(S.mdb.lon, 3)}, le site est saisi en ${nf(c.site.lat, 3)} / ${nf(c.site.lon, 3)}.` });
   if (c.meteo.tmy_has_horizon && S.files.horizon && c.horizon.use) out.push({ level: 'warn', title: 'Masque lointain en double', message: "Le TMY contient déjà l'horizon PVGIS : le masque déposé s'ajoute (union des deux masques) et la ligne « masque lointain » du diagramme de pertes est sous-estimée." });
   if (S.info.tmy && !S.info.tmy.error && S.info.tmy.lat != null && (Math.abs(S.info.tmy.lat - c.site.lat) > 0.05 || Math.abs(S.info.tmy.lon - c.site.lon) > 0.05))
     out.push({ level: 'warn', title: 'Coordonnées', message: `Le TMY a été produit pour ${nf(S.info.tmy.lat, 3)} / ${nf(S.info.tmy.lon, 3)}, le site est saisi en ${nf(c.site.lat, 3)} / ${nf(c.site.lon, 3)}.`, fix: 'tmyll' });
@@ -795,7 +878,7 @@ function canRun(list) {
 function renderChecklist(list) {
   const r = canRun(list);
   const items = Object.entries(FILES).map(([k, f]) => {
-    const ok = k === 'gsa' ? !!S.gsa : !!S.files[k] && !(S.info[k] && S.info[k].error);
+    const ok = k === 'gsa' ? !!S.gsa : k === 'mdb' ? !!S.mdb : !!S.files[k] && !(S.info[k] && S.info[k].error);
     return `<div class="${ok ? 'ok' : f.req ? '' : 'opt'}"><i>${ok ? '✓' : f.req ? '!' : '–'}</i>${f.label}</div>`;
   }).join('');
   $('#btnExtract').disabled = !(S.ready && S.files.pan && S.files.ond && !r.blocked && S.cfg.site.lat != null && S.cfg.site.lon != null);
@@ -820,9 +903,10 @@ $('#btnRun').addEventListener('click', async () => {
     Object.assign(files, { pan_extra: S.lib.pan.map((x) => x.text), ond_extra: S.lib.ond.map((x) => x.text), near_masks: {} });
     S.cfg.structure.fields.forEach((f) => { if (S.near[f.id]) files.near_masks[String(f.id)] = S.near[f.id].text; });
   }
-  if (S.gsa) files.gsa = S.gsa;
+  const ref = meteoRef();
+  if (ref) files.gsa = ref;
   const cfg = clone(S.cfg);
-  if (!S.gsa) cfg.meteo.gsa_mode = 'none';
+  if (!ref) cfg.meteo.gsa_mode = 'none';
   const t0 = performance.now();
   try {
     const res = await call('run', { cfg, files });
@@ -908,10 +992,10 @@ function renderMeteo() {
     <tr><td>Coordonnées du fichier</td><td>${nf(t.lat, 4)} / ${nf(t.lon, 4)} · ${nf(t.elev)} m</td></tr>
     <tr><td>Décalage horaire de l'irradiance</td><td>${nf(t.offset_h * 60, 1)} min</td></tr>
     <tr><td>Horizon PVGIS inclus dans le TMY</td><td>${r.config.meteo.tmy_has_horizon ? 'oui' : 'non'}</td></tr>
-    <tr><td>Recalage</td><td>${r.meteo_correction ? { monthly: 'Global Solar Atlas, mensuel', annual: 'Global Solar Atlas, annuel' }[r.config.meteo.gsa_mode] + (r.config.meteo.gsa_align_temp ? ' + température' : '') : 'aucun'}</td></tr></table>`;
+    <tr><td>Recalage</td><td>${r.meteo_correction ? `${esc(r.meteo_ref || 'Global Solar Atlas')}, ${r.config.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel'}` + (r.config.meteo.gsa_align_temp ? ' + température' : '') : 'aucun'}</td></tr></table>`;
   if (r.meteo_correction) {
     const mc = r.meteo_correction, sm = (k) => mc.reduce((a, b) => a + (b[k] || 0), 0);
-    h += `<h3 style="margin-top:16px">Recalage du TMY sur Global Solar Atlas</h3><div class="tblwrap"><table class="res"><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th><th>k direct</th><th>k diffus</th><th>T moy.</th><th>h écrêtées</th></tr>` +
+    h += `<h3 style="margin-top:16px">Recalage du TMY sur ${esc(r.meteo_ref || 'Global Solar Atlas')}</h3><div class="tblwrap"><table class="res"><tr><th>Mois</th><th>GHI TMY</th><th>GHI réf.</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF réf.</th><th>DIF corrigé</th><th>k direct</th><th>k diffus</th><th>T moy.</th><th>h écrêtées</th></tr>` +
       mc.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td><td>${nf(m.k_direct, 3)}</td><td>${nf(m.k_diffus, 3)}</td><td>${nf(m.t_moy, 1)}</td><td>${m.heures_ecretees}</td></tr>`).join('') +
       `<tr class="tot"><td>Année</td><td>${nf(sm('ghi_tmy'), 1)}</td><td>${nf(sm('ghi_cible'), 1)}</td><td>${nf(sm('ghi_corrige'), 1)}</td><td>${nf(sm('dif_tmy'), 1)}</td><td>${nf(sm('dif_cible'), 1)}</td><td>${nf(sm('dif_corrige'), 1)}</td><td></td><td></td><td>${nf(r.summary.t_amb, 1)}</td><td>${sm('heures_ecretees')}</td></tr></table></div>
       <p class="note">Diffus et direct sont multipliés séparément puis le GHI est recomposé (DIF + DNI × cos z). Le DNI horaire est plafonné à 1,05 × le ciel clair et l'énergie écrêtée est redistribuée sur le mois.</p>`;
@@ -979,7 +1063,7 @@ $('#expCsv').addEventListener('click', async () => { const t = await call('csv')
 $('#expJson').addEventListener('click', saveProject);
 $('#btnSave').addEventListener('click', saveProject);
 function saveProject() {
-  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa,
+  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb,
     lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near };
   download(baseName() + '.json', new Blob([JSON.stringify(data)], { type: 'application/json' }));
 }
@@ -991,7 +1075,7 @@ $('#openProject').addEventListener('change', async (e) => {
 function loadProject(d) {
   if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
   resetView();
-  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.info = {}; S.res = null; S.check = null;
+  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.info = {}; S.res = null; S.check = null;
   S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; if (S.ready) parseLib();
   fillForm(); syncStrings(); save(); refreshAll();
   setStatus(`Projet « ${S.cfg.project.name} – ${S.cfg.project.variant} » ouvert.` + (d.note ? ' ' + d.note : ''), 'ok', 100);
@@ -1010,7 +1094,7 @@ function resetView() {
 $('#btnNew').addEventListener('click', () => {
   if (!confirm('Repartir d\'un projet vierge ? Les saisies et fichiers actuels seront effacés.')) return;
   resetView();
-  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
+  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.mdb = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
   fillForm(); syncStrings(); save(); refreshAll();
   $$('details.sec').forEach((d) => (d.open = d.id === 'sec-project' || d.id === 'sec-site'));
   setStatus('Nouveau projet : renseigner le site, déposer les fichiers puis lancer la simulation.', 'ok', 100);
@@ -1117,7 +1201,7 @@ $('#expPdf').addEventListener('click', async () => {
   const html = `<h1>${esc(c.project.name)} – ${esc(c.project.variant)}</h1>
     <div class="sub">Rapport de simulation de productible · ${new Date().toLocaleDateString('fr-FR')}${c.project.author ? ' · ' + esc(c.project.author) : ''} · moteur v${r.engine}, pvlib ${r.pvlib}</div>
     <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50)</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
-    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé Global Solar Atlas (' + c.meteo.gsa_mode + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
+    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé ' + esc(r.meteo_ref || 'Global Solar Atlas') + ' (' + (c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel') + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
     <div>${kv([['Modules', r.fields ? [...new Set(r.fields.map((f) => f.module))].map(esc).join(', ') + ` · ${nf(s.n_modules)} modules` : `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', r.fields ? `${s.n_inverters} : ` + [...new Set(r.fields.map((f) => f.inverter))].map(esc).join(', ') : `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
     ${aerialSite}
     <h2>Vérifications de dimensionnement</h2><table><tr><th>Vérification</th><th>Statut</th><th>Détail</th></tr>${r.alerts.map((a) => `<tr><td>${esc(a.title)}</td><td>${{ ok: 'OK', warn: 'Alerte', block: 'Bloquant' }[a.level]}</td><td>${esc(a.message)}</td></tr>`).join('')}</table>
@@ -1126,7 +1210,7 @@ $('#expPdf').addEventListener('click', async () => {
     <h2 class="pb">Diagramme de pertes</h2><table><tr><th>Poste</th><th>Variation</th><th>Valeur</th></tr>${r.losses.map((x) => `<tr${x.pct == null ? ' class="tot"' : ''}><td>${esc(x.label)}</td><td>${x.pct == null ? '' : (x.pct > 0 ? '+' : '') + nf(x.pct, 2) + ' %'}</td><td>${x.value == null ? '' : nf(x.value, 1) + ' ' + x.unit}</td></tr>`).join('')}</table>
     <h2>P50 / P90</h2><div class="cols"><div>${kv([['P50', `${nf(p.p50, 1)} kWh/kWc · ${nf(p.p50_mwh, 0)} MWh`], ['P75', `${nf(p.p75, 1)} kWh/kWc`], ['P90', `${nf(p.p90, 1)} kWh/kWc · ${nf(p.p90_mwh, 0)} MWh`], ['P99', `${nf(p.p99, 1)} kWh/kWc`], ['Incertitude combinée', `${nf(p.sigma_pct, 2)} %`], ['Variabilité météo', esc(p.meteo_var_source)]])}</div>
     <div><table><tr><th>Incertitude</th><th>σ</th></tr>${p.items.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${nf(b, 2)} %</td></tr>`).join('')}</table></div></div>
-    ${r.meteo_correction ? `<h2>Recalage météo Global Solar Atlas</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI GSA</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF GSA</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
+    ${r.meteo_correction ? `<h2>Recalage météo ${esc(r.meteo_ref || 'Global Solar Atlas')}</h2><table><tr><th>Mois</th><th>GHI TMY</th><th>GHI réf.</th><th>GHI corrigé</th><th>DIF TMY</th><th>DIF réf.</th><th>DIF corrigé</th></tr>${r.meteo_correction.map((m) => `<tr><td>${m.mois}</td><td>${nf(m.ghi_tmy, 1)}</td><td>${nf(m.ghi_cible, 1)}</td><td>${nf(m.ghi_corrige, 1)}</td><td>${nf(m.dif_tmy, 1)}</td><td>${nf(m.dif_cible, 1)}</td><td>${nf(m.dif_corrige, 1)}</td></tr>`).join('')}</table>` : ''}
     ${r.horizon ? `<h2>Masque lointain</h2>${img('chMask')}` : ''}
     ${r.fields ? '<h2>Champs de toiture</h2>' + fieldsTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '').replace('<table class="res">', '<table class="res wide">') + aerialRoofs : ''}
     ${(r.shading_configs || []).length > 1 ? '<h2>Ombrage électrique</h2>' + shConfTable(r).replace(/<h3>.*?<\/h3>/, '').replace(/<\/?div[^>]*>/g, '') : ''}
@@ -1150,12 +1234,14 @@ function migrate(raw) {
   }
   const ll = raw && raw.module && raw.module.lowlight_cal;
   if (ll === true || ll === undefined) cfg.module.lowlight_cal = 'auto'; else if (ll === false) cfg.module.lowlight_cal = 'off';
+  const rm = (raw && raw.meteo) || {};
+  if (rm.gsa_mode === 'none') { cfg.meteo.gsa_mode = 'monthly'; if (rm.use_gsa === undefined) cfg.meteo.use_gsa = false; }
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;
 }
-function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
+function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb, mdb: S.mdb, lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; } } catch (e) { /* ignore */ }
+  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; } } catch (e) { /* ignore */ }
 }
 
 load(); buildForm(); fillForm(); syncStrings(); initMap(); refreshAll();
