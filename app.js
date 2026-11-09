@@ -27,7 +27,7 @@ const DEFAULTS = {
     ['Modélisation (pertes DC, AC, ombrages, T°, disponibilité)', 2.5],
     ['Pertes spectrales et réflexion', 1.5], ['Transposition', 1.0], ['Paramètres des modules PV', 2.0],
     ['Efficacité onduleur', 0.5], ['Encrassement', 1.0], ['Mismatch', 0.9], ['Estimation dégradation', 0.9]] },
-  lifetime: { years: 1, degradation: 0.4 },
+  lifetime: { years: 1, degradation: 0.4, year: 1 },
   extract: { tz: 'Europe/Paris', stamp: 'start', sensor: 'modules', sensor_tilt: null, sensor_azimuth: null, meter: 'grid' },
 };
 const MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
@@ -182,7 +182,8 @@ function buildForm() {
     section('thermal', 'Thermique et IAM', num('thermal.uc', 'Uc', 'W/m²K') + num('thermal.uv', 'Uv', 'W/m²K/m/s') +
       sel('iam.mode', 'Modèle IAM', [['fresnel', 'Fresnel (verre + couche AR)'], ['pan', 'Profil utilisateur du .PAN']], { full: true }) +
       num('iam.n', 'Indice du verre', '', { step: 0.001, show: 'iam.mode==fresnel' }) + num('iam.n_ar', 'Indice couche AR', '', { step: 0.001, ph: 'sans', show: 'iam.mode==fresnel' })),
-    section('dc', 'Pertes DC', num('losses.soiling', 'Salissure', '%') + num('losses.lid', 'LID', '%') + num('losses.quality', 'Qualité module', '%') +
+    section('dc', 'Pertes DC', num('lifetime.year', 'Année de fonctionnement simulée', '', { step: 1, min: 1, hint: 'Année 1 = mise en service. Le vieillissement cumulé, (1 − dégradation)^(année − 1), est appliqué comme une perte DC.' }) +
+      num('lifetime.degradation', 'Dégradation annuelle', '%/an', { step: 0.05 }) + num('losses.soiling', 'Salissure', '%') + num('losses.lid', 'LID', '%') + num('losses.quality', 'Qualité module', '%') +
       num('losses.mismatch', 'Mismatch modules', '%') + num('losses.string_mismatch', 'Mismatch chaînes', '%') + num('losses.dc_ohmic', 'Ohmiques DC à STC', '%')),
     section('ac', 'Pertes AC et système', num('losses.ac_ohmic', 'Ohmiques AC à STC', '%') + num('losses.mv_line', 'Ligne HTA à STC', '%') +
       chk('losses.tr_enabled', 'Transformateur') + num('losses.tr_sn_kva', 'Puissance transfo', 'kVA') + num('losses.tr_iron_kw', 'Pertes fer', 'kW') +
@@ -192,7 +193,7 @@ function buildForm() {
     section('p90', 'P50 / P90', num('p90.meteo_var', 'Variabilité météo interannuelle', '%', { step: 0.1, full: true, hint: 'Remplacée par la valeur calculée si le CSV mensuel PVGIS est déposé.' }) +
       drop('pvgis_monthly', '<span>CSV « Monthly data » de PVGIS (GHI mensuel par année)</span>') +
       `<div class="fld full groups"><label>Autres incertitudes<i>écart-type %</i></label><div id="p90items"></div><button type="button" class="mini" id="addP90">+ Ajouter</button></div>` +
-      num('lifetime.years', 'Années simulées', '', { step: 1, min: 1 }) + num('lifetime.degradation', 'Dégradation annuelle', '%/an', { step: 0.05 })),
+      num('lifetime.years', "Années du tableau d'évolution", 'ans', { step: 1, min: 1, hint: "Nombre d'années du tableau P50 / P90 sur la durée de vie (onglet P50 / P90), avec la dégradation annuelle de la section Pertes DC." })),
   ].join('');
 
   // liaisons génériques
@@ -925,7 +926,7 @@ function renderResults() {
   const r = S.res, s = r.summary;
   $('#results').hidden = false; renderChecklist([]);
   $('#tiles').innerHTML = [
-    ['main', nf(s.yield_kwh_kwc, 0), 'kWh/kWc/an · P50'], ['', nf(s.e_grid_mwh, 0), 'MWh/an injectés'],
+    ['main', nf(s.yield_kwh_kwc, 0), 'kWh/kWc/an · P50' + ((r.config.lifetime.year || 1) > 1 ? ` · année ${r.config.lifetime.year}` : '')], ['', nf(s.e_grid_mwh, 0), 'MWh/an injectés'],
     ['pv', pf(s.pr, 1), 'Performance ratio'], ['', nf(r.p90.p90, 0), `kWh/kWc · P90 (${pf(r.p90.p90_ratio, 1)})`],
     ['', nf(s.glob_inc, 0), 'kWh/m² dans le plan'], ['', nf(s.pnom_kwc, 1), `kWc · DC/AC ${nf(s.dc_ac, 2)}`],
   ].map(([c, v, l]) => `<div class="tile ${c}"><b>${v}</b><span>${l}</span></div>`).join('');
@@ -1040,6 +1041,10 @@ function renderP90() {
     (S.res.lifetime.length > 1 ? `<h3 style="margin-top:14px">Évolution sur ${S.res.lifetime.length} ans (dégradation ${nf(S.res.config.lifetime.degradation, 2)} %/an)</h3><div class="tblwrap"><table class="res"><tr><th>Année</th><th>P50 kWh/kWc</th><th>P90 kWh/kWc</th><th>P50 MWh</th></tr>${S.res.lifetime.map((l) => `<tr><td>${l.annee}</td><td>${nf(l.p50, 1)}</td><td>${nf(l.p90, 1)}</td><td>${nf(l.e_p50_mwh, 0)}</td></tr>`).join('')}</table></div>` : '');
 }
 
+function ageTxt(c) {
+  const y = Math.max(1, Number(c.lifetime.year) || 1), d = Number(c.lifetime.degradation) || 0;
+  return y === 1 ? `année 1 (mise en service), sans vieillissement · dégradation ${nf(d, 2)} %/an` : `année ${y} · vieillissement ${nf(100 * (1 - Math.pow(1 - d / 100, y - 1)), 2)} % (${nf(d, 2)} %/an sur ${y - 1} an${y > 2 ? 's' : ''})`;
+}
 function renderHyp() {
   const r = S.res, s = r.summary, pan = r.pan, ond = r.ond, c = r.config;
   const kv = (rows) => `<table class="res kv">${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table>`;
@@ -1059,6 +1064,7 @@ function renderHyp() {
     ['Bifacialité retenue', s.bifaciality ? nf(s.bifaciality, 2) : 'non'],
     ['Onduleur', `${esc(ond.manufacturer)} ${esc(ond.model)}`],
     ['Puissance onduleur', `Pnom ${nf(ond.pnom / 1000)} kW à ${nf(ond.t_pnom)} °C · Pmax ${nf(ond.pmax / 1000)} kW à ${nf(ond.t_pmax)} °C · offset ${nf(c.inverters.t_offset, 1)} °C`],
+    ['Température minimale du site', `${nf(c.inverters.t_min ?? -10, 0)} °C (vérification de la tension à vide des chaînes)`],
     ['Groupes', r.fields ? r.fields.map((f) => `${esc(f.name)} : ${f.n_inv} × ${f.n_str} chaînes de ${f.n_series}`).join(' · ') + ` · DC/AC ${nf(s.dc_ac, 2)}` : c.inverters.groups.map(([a, b]) => `${a} × ${b} chaînes`).join(' + ') + ` · DC/AC ${nf(s.dc_ac, 2)}`],
     ['Plage MPPT / Vmax / Imax DC', `${nf(ond.vmin)}–${nf(ond.vmax)} V · ${nf(ond.vabsmax)} V · ${nf(ond.imax_dc)} A`],
     ['Tension MPP moyenne', `${nf(s.vmpp_mean)} V`]])}</div><div>${kv([
@@ -1069,6 +1075,7 @@ function renderHyp() {
     ['Bifacial', c.bifacial.enabled ? `albédo sol ${c.bifacial.albedo_ground} · ombrage arrière ${c.bifacial.rear_shading} % · mismatch ${c.bifacial.rear_mismatch} %` : 'non'],
     ['Thermique', `Uc ${c.thermal.uc} · Uv ${c.thermal.uv}`], ['IAM', c.iam.mode === 'pan' ? 'profil du .PAN' : `Fresnel n=${c.iam.n}, n(AR)=${c.iam.n_ar ?? '–'}`],
     ['Pertes DC', `salissure ${c.losses.soiling} % · LID ${c.losses.lid} % · qualité ${c.losses.quality} % · mismatch ${c.losses.mismatch} + ${c.losses.string_mismatch} % · ohmiques ${c.losses.dc_ohmic} %`],
+    ['Année simulée et vieillissement', ageTxt(c)],
     ['Pertes AC', `ohmiques ${c.losses.ac_ohmic} % · HTA ${c.losses.mv_line} % · transfo ${c.losses.tr_enabled ? `${c.losses.tr_sn_kva} kVA, fer ${c.losses.tr_iron_kw} kW, cuivre ${c.losses.tr_cu_kw} kW` : 'non'}`],
     ['Système', `auxiliaires ${c.losses.aux_w} W > ${c.losses.aux_thresh_kw} kW · indisponibilité ${c.losses.availability} %${c.inverters.p_inj_kw ? ` · injection limitée à ${c.inverters.p_inj_kw} kW` : ''}`],
     ['Moteur', `v${r.engine} · pvlib ${r.pvlib}`]])}</div></div>`;
@@ -1223,8 +1230,8 @@ $('#expPdf').addEventListener('click', async () => {
   const kv = (rows) => `<table>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table>`;
   const html = `<h1>${esc(c.project.name)} – ${esc(c.project.variant)}</h1>
     <div class="sub">Rapport de simulation de productible · ${new Date().toLocaleDateString('fr-FR')}${c.project.author ? ' · ' + esc(c.project.author) : ''} · moteur v${r.engine}, pvlib ${r.pvlib}</div>
-    <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50)</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
-    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé ' + esc(r.meteo_ref || 'Global Solar Atlas') + ' (' + (c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel') + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
+    <div class="kpis"><div><b>${nf(s.yield_kwh_kwc, 0)}</b>kWh/kWc/an (P50${(c.lifetime.year || 1) > 1 ? ', année ' + c.lifetime.year : ''})</div><div><b>${nf(s.e_grid_mwh, 0)}</b>MWh/an</div><div><b>${pf(s.pr, 1)}</b>PR</div><div><b>${nf(p.p90, 0)}</b>kWh/kWc (P90)</div></div>
+    <h2>Site et système</h2><div class="cols"><div>${kv([['Site', `${nf(c.site.lat, 4)} °N / ${nf(c.site.lon, 4)} °E · ${nf(c.site.alt)} m`], ['Météo', `${esc(r.tmy_info.db || 'PVGIS')} ${esc(r.tmy_info.years || '')}${r.meteo_correction ? ' recalé ' + esc(r.meteo_ref || 'Global Solar Atlas') + ' (' + (c.meteo.gsa_mode === 'monthly' ? 'mensuel' : 'annuel') + ')' : ''}`], ['GHI / GlobInc', `${nf(s.glob_hor, 1)} / ${nf(s.glob_inc, 1)} kWh/m²`], ['Masque lointain', r.horizon ? 'oui' : 'non'], ['Année simulée', ageTxt(c)], ['T min. du site', `${nf(c.inverters.t_min ?? -10, 0)} °C`], ['Structure', r.fields ? `Toiture, ${r.fields.length} champ(s)` : { fixed: `Sheds ${c.structure.tilt}° / ${c.structure.azimuth}°`, tracker: `Tracker ±${c.structure.max_angle}°`, ew: `Est-Ouest ${c.structure.tilt}° · ${ewFaces(c.structure.azimuth)}` }[c.structure.type] + ` · GCR ${pf(s.gcr, 1)}`]])}</div>
     <div>${kv([['Modules', r.fields ? [...new Set(r.fields.map((f) => f.module))].map(esc).join(', ') + ` · ${nf(s.n_modules)} modules` : `${nf(s.n_modules)} × ${esc(r.pan.model)} (${nf(r.pan.pnom)} Wc)`], ['Puissance DC', `${nf(s.pnom_kwc, 1)} kWc`], ['Onduleurs', r.fields ? `${s.n_inverters} : ` + [...new Set(r.fields.map((f) => f.inverter))].map(esc).join(', ') : `${s.n_inverters} × ${esc(r.ond.model)}`], ['Puissance AC', `${nf(s.pac_kva)} kVA · DC/AC ${nf(s.dc_ac, 2)}`], ['Bifacial', s.bifaciality ? 'oui, ' + nf(s.bifaciality, 2) : 'non']])}</div></div>
     ${aerialSite}
     <h2>Vérifications de dimensionnement</h2><table><tr><th>Vérification</th><th>Statut</th><th>Détail</th></tr>${r.alerts.map((a) => `<tr><td>${esc(a.title)}</td><td>${{ ok: 'OK', warn: 'Alerte', block: 'Bloquant' }[a.level]}</td><td>${esc(a.message)}</td></tr>`).join('')}</table>

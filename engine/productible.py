@@ -25,7 +25,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import fsolve
 from scipy.stats import norm
 
-ENGINE_VERSION = "1.7.2"
+ENGINE_VERSION = "1.8.0"
 MONTHS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc']
 K_B, Q_E = 1.380649e-23, 1.602176634e-19
 
@@ -1003,7 +1003,7 @@ DEFAULTS = dict(
         ['Pertes spectrales et réflexion', 1.5], ['Transposition', 1.0],
         ['Paramètres des modules PV', 2.0], ['Efficacité onduleur', 0.5], ['Encrassement', 1.0],
         ['Mismatch', 0.9], ['Estimation dégradation', 0.9]]),
-    lifetime=dict(years=1, degradation=0.4),
+    lifetime=dict(years=1, degradation=0.4, year=1),
 )
 
 
@@ -1098,6 +1098,9 @@ def _simulate_one(cfg_in, files):
 
     # --- par face : irradiance -> puissance DC
     agg = {}
+    # vieillissement : dégradation annuelle cumulée jusqu'à l'année de fonctionnement simulée (année 1 = mise en service)
+    op_year = max(1, int(cfg['lifetime'].get('year') or 1))
+    age_fac = (1 - float(cfg['lifetime'].get('degradation') or 0) / 100) ** (op_year - 1)
     acc = lambda k, s, share: agg.__setitem__(k, agg.get(k, 0) + s * share)
     p_dc = pd.Series(0.0, index=w.index)
     v_w = pd.Series(0.0, index=w.index)
@@ -1132,7 +1135,8 @@ def _simulate_one(cfg_in, files):
         elec_frac = (fi['elec_irr'] / g_eff.where(mask)).fillna(0).clip(0, 1)
         p1 = p_tmp * (1 - elec_frac)
         p2 = p1 * (1 - L['lid'] / 100)
-        p3 = p2 * (1 - L['quality'] / 100) * (1 - L['mismatch'] / 100) * (1 - L['string_mismatch'] / 100)
+        p2a = p2 * age_fac
+        p3 = p2a * (1 - L['quality'] / 100) * (1 - L['mismatch'] / 100) * (1 - L['string_mismatch'] / 100)
         rear_share = ((bifaciality * fi['rear_eff'] / g_eff.where(mask)).fillna(0)
                       if bf['enabled'] else 0.0)
         p4 = p3 * (1 - float(bif['rear_mismatch']) / 100 * rear_share)
@@ -1146,7 +1150,7 @@ def _simulate_one(cfg_in, files):
                      ('rear_eff', fi['rear_eff']), ('g_eff', g_eff)):
             acc(k, s, share)
         for k, s in (('p_nom', p_nom_stc), ('p_irr', p_irr), ('p_tmp', p_tmp), ('p1', p1), ('p2', p2),
-                     ('p3', p3), ('p4', p4), ('p5', p5)):
+                     ('p2a', p2a), ('p3', p3), ('p4', p4), ('p5', p5)):
             acc(k, s, 1.0)
         acc('t_cell_w', t_cell * p5, 1.0)
         face_info.append(dict(name=face['name'], share=share,
@@ -1296,7 +1300,8 @@ def _simulate_one(cfg_in, files):
         ('dc', 'Perte due à la température', S(agg['p_tmp']) / S(agg['p_irr']) - 1, S(agg['p_tmp']) / 1e6, 'MWh'),
         ('dc', 'Ombrage électrique selon chaînes', S(agg['p1']) / S(agg['p_tmp']) - 1, S(agg['p1']) / 1e6, 'MWh'),
         ('dc', 'LID', S(agg['p2']) / S(agg['p1']) - 1, S(agg['p2']) / 1e6, 'MWh'),
-        ('dc', 'Qualité, mismatch modules et chaînes', S(agg['p3']) / S(agg['p2']) - 1, S(agg['p3']) / 1e6, 'MWh'),
+        ('dc', f'Vieillissement des modules (année {op_year})', S(agg['p2a']) / S(agg['p2']) - 1, S(agg['p2a']) / 1e6, 'MWh'),
+        ('dc', 'Qualité, mismatch modules et chaînes', S(agg['p3']) / S(agg['p2a']) - 1, S(agg['p3']) / 1e6, 'MWh'),
         ('dc', 'Mismatch face arrière', S(agg['p4']) / S(agg['p3']) - 1, S(agg['p4']) / 1e6, 'MWh'),
         ('dc', 'Pertes ohmiques DC', S(agg['p5']) / S(agg['p4']) - 1, S(agg['p5']) / 1e6, 'MWh'),
     ]
@@ -1386,8 +1391,11 @@ def compute_p90(y50, pkwp, cfg, files):
                p50_mwh=y50 * pkwp / 1000, p90_mwh=pxx[90] * pkwp / 1000, z90=norm.ppf(0.9))
     years = int(cfg['lifetime'].get('years', 1) or 1)
     deg = float(cfg['lifetime'].get('degradation', 0) or 0) / 100
-    lifetime = [dict(annee=y, p50=y50 * (1 - deg) ** (y - 1), p90=pxx[90] * (1 - deg) ** (y - 1),
-                     e_p50_mwh=y50 * (1 - deg) ** (y - 1) * pkwp / 1000) for y in range(1, years + 1)]
+    y0 = max(1, int(cfg['lifetime'].get('year') or 1))          # année déjà simulée (vieillissement inclus)
+    last = max(years, y0)
+    f = lambda y: (1 - deg) ** (y - y0)
+    lifetime = [dict(annee=y, p50=y50 * f(y), p90=pxx[90] * f(y), e_p50_mwh=y50 * f(y) * pkwp / 1000)
+                for y in range(1, last + 1)]
     return p90, lifetime
 
 

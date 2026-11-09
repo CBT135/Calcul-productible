@@ -131,6 +131,7 @@ Les noms de colonnes sont reconnus automatiquement (GTI, POA, irradiance plan, t
   - **jamais** : modèle à une diode brut.
 - **Thermique** : bilan thermique Uc / Uv (absorption du `.PAN`).
 - **Pertes DC** : LID, qualité, mismatch des modules et des chaînes, pertes ohmiques proportionnelles au courant.
+- **Vieillissement** : la simulation porte sur une année de fonctionnement choisie (section Pertes DC, année 1 = mise en service). La perte (1 − dégradation annuelle)^(année − 1) est appliquée sur le DC, avant l'onduleur, et apparaît dans le diagramme de pertes. Le tableau d'évolution de l'onglet P50 / P90 part de cette année.
 - **Onduleurs** : courbes Pin→Pout du `.OND` aux trois tensions, interpolées sur la tension MPP du champ. Sont aussi pris en compte : le seuil de démarrage, la sortie de plage MPPT basse, et la Pmax déclassée selon la température ambiante + **offset** (TPMax → TPNom → TPLim1 → TPLimAbs).
 - **AC et système** : auxiliaires, pertes ohmiques AC et ligne HTA (quadratiques), transformateur (fer 24 h/24 ou non, cuivre quadratique), limite d'injection, indisponibilité.
 - **PR** : E_grid / (GlobInc × P_nom STC), avec GlobInc calculé avant le masque lointain.
