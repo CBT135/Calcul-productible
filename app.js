@@ -15,7 +15,7 @@ const DEFAULTS = {
     shading_configs: [{ sub_in_height: null, share: 100 }], fields: [],
     axis_azimuth: 0, max_angle: 55, backtrack: true, axis_height: 1.5 },
   array: { n_series: null, n_strings: 0 },
-  inverters: { groups: [[null, null]], t_offset: 0, p_inj_kw: null },
+  inverters: { groups: [[null, null]], t_offset: 10, p_inj_kw: null },
   bifacial: { enabled: true, bifaciality: null, albedo_ground: 0.17, rear_shading: 5, rear_mismatch: 10, transparent: 0 },
   thermal: { uc: 29, uv: 0 },
   iam: { mode: 'fresnel', n: 1.526, n_ar: 1.29 },

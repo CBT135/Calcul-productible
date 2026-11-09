@@ -979,7 +979,7 @@ DEFAULTS = dict(
                    shading_configs=[dict(sub_in_height=None, share=100.0)],
                    axis_azimuth=0.0, max_angle=55.0, backtrack=True, axis_height=1.5),
     array=dict(n_series=27, n_strings=128),
-    inverters=dict(groups=[[4, 21], [2, 22]], t_offset=0.0, p_inj_kw=None),
+    inverters=dict(groups=[[4, 21], [2, 22]], t_offset=10.0, p_inj_kw=None),
     bifacial=dict(enabled=True, bifaciality=None, albedo_ground=0.17, rear_shading=5.0,
                   rear_mismatch=10.0, transparent=0.0),
     thermal=dict(uc=29.0, uv=0.0),
@@ -1174,7 +1174,7 @@ def _simulate_one(cfg_in, files):
             out[j] = np.interp(vv[j], vref[order], effs[order, j])
         return out
 
-    t_inv = w.temp_air + float(cfg['inverters'].get('t_offset', 0.0))
+    t_inv = w.temp_air + float(cfg['inverters'].get('t_offset', 10.0))
     tp, pp = [], []
     for t_, p_ in ((ond['t_pmax'], ond['pmax']), (ond['t_pnom'], ond['pnom']),
                    (ond['t_lim1'], ond['p_lim1']), (ond['t_limabs'], ond['p_limabs'])):
