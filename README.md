@@ -24,6 +24,31 @@ Application web d'estimation de productible photovoltaïque au pas horaire, qui 
 
 Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 
+## Importer une étude PVsyst
+
+Le bouton **Import PVsyst**, entre « Nouveau » et « Ouvrir », crée un projet à partir d'un rapport de simulation PVsyst en PDF (versions 7 et 8, rapport en anglais). Le texte du PDF est lu dans le navigateur avec pdf.js, et aucun fichier n'est transmis.
+
+**Ce qui est repris :**
+- **Projet et site** : projet, variante, coordonnées, altitude, albédo.
+- **Structure** :
+  - sheds : inclinaison, azimut, entraxe, largeur sensible, hauteur, nombre de rangées, chaînes dans la largeur, effet électrique ;
+  - tracker : axe, angle maximal, backtracking, entraxe, largeur, hauteur d'axe ;
+  - Est-Ouest (« Dome ») : inclinaison et orientation du faîtage ;
+  - plans fixes sans scène 3D : un champ de toiture par sous-champ.
+- **Champ et onduleurs** : modules en série, chaînes, onduleurs (répartis en groupes), limite d'injection, modèles et noms des fichiers .PAN et .OND.
+- **Bifacial** : bifacialité, albédo du sol, ombrage et mismatch arrière, transparence.
+- **Thermique et IAM** : Uc, Uv, IAM Fresnel.
+- **Pertes** : salissure, LID, qualité, mismatch, pertes ohmiques DC et AC, ligne HTA, transformateur, auxiliaires, indisponibilité.
+- **Horizon** : profil du masque, s'il figure dans le rapport.
+- **Météo et résultats** : bilan météo mensuel, utilisable comme base de recalage du TMY, et résultats PVsyst (productible, énergie, PR, bilan mensuel).
+
+Une fenêtre récapitule ce qui a été lu et ce qui reste à vérifier ou à compléter, avant de créer le projet. Il faut ensuite déposer le TMY PVGIS, le .PAN et le .OND, absents du rapport. Après la simulation, l'onglet Synthèse compare les résultats à ceux de l'étude PVsyst : productible, énergie, PR, irradiations, puis énergie mois par mois.
+
+Limites :
+- les modules dans la largeur des tables sont déduits de la largeur sensible ;
+- la géométrie des chapelles Est-Ouest n'apparaît pas sans scène 3D ;
+- un IAM défini par l'utilisateur dans PVsyst n'est pas repris.
+
 ## Simuler un extrait météo (exploitation)
 
 Le bouton **Simuler un extrait météo**, à droite de « Lancer la simulation », compare la production mesurée sur une courte période à la simulation du projet, calculée avec les mesures météo du site. Il ne demande pas de TMY : seuls le site, le `.PAN`, le `.OND` et les saisies du projet sont nécessaires.

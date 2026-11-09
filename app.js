@@ -59,7 +59,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const nf = (v, d = 0) => (v == null || isNaN(v) ? '–' : Number(v).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pf = (v, d = 1) => (v == null || isNaN(v) ? '–' : nf(100 * v, d) + ' %');
 
-const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, mdb: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {}, ext: null, exFile: null };
+const S = { cfg: clone(DEFAULTS), files: {}, names: {}, gsa: null, mdb: null, pvsyst: null, lib: { pan: [], ond: [] }, near: {}, info: {}, check: null, res: null, ready: false, charts: {}, ext: null, exFile: null };
 
 // ------------------------------------------------------------------ worker
 const worker = new Worker('worker.js');
@@ -841,7 +841,8 @@ function missingFields() {
     if (!c.structure.fields.length) out.push('Au moins un toit');
     const lab = { tilt: 'inclinaison', length: 'longueur', height: 'hauteur', n_series: 'modules en série', n_inv: 'onduleurs', n_str: 'chaînes par onduleur' };
     c.structure.fields.forEach((f, i) => {
-      const m = Object.keys(lab).filter((k) => f[k] == null || f[k] === '' || Number.isNaN(f[k]) || (k !== 'tilt' && !(f[k] > 0)));
+      const forced = f.n_h > 0 && f.n_v > 0;
+      const m = Object.keys(lab).filter((k) => !(forced && (k === 'length' || k === 'height')) && (f[k] == null || f[k] === '' || Number.isNaN(f[k]) || (k !== 'tilt' && !(f[k] > 0))));
       if (m.length) out.push(`${f.name || 'Champ ' + (i + 1)} (${m.map((k) => lab[k]).join(', ')})`);
     });
   } else if (!c.inverters.groups.length || c.inverters.groups.some((g) => !(g[0] > 0) || !(g[1] > 0))) out.push("Groupes d'onduleurs");
@@ -932,7 +933,28 @@ function renderResults() {
   $('#tblMonthly').innerHTML = `<table class="res"><tr><th>Mois</th><th>GHI<br>kWh/m²</th><th>DIF<br>kWh/m²</th><th>T amb<br>°C</th><th>GlobInc<br>kWh/m²</th><th>GlobEff<br>kWh/m²</th><th>Arrière<br>kWh/m²</th><th>E champ<br>MWh</th><th>E injectée<br>MWh</th><th>Productible<br>kWh/kWc</th><th>PR</th><th>PR bifacial</th></tr>${rows}</table>`;
   $('#shResults').innerHTML = r.fields ? '' : shConfTable(r);
   $('#fieldsResults').innerHTML = fieldsTable(r);
-  drawCharts(); renderLosses(); renderMeteo(); renderP90(); renderHyp();
+  drawCharts(); renderLosses(); renderMeteo(); renderP90(); renderHyp(); renderPvsystCmp();
+}
+function renderPvsystCmp() {
+  const box = $('#pvsystCmp'), P = S.pvsyst, r = S.res;
+  if (!P || !r) { box.hidden = true; box.innerHTML = ''; return; }
+  const s = r.summary, R = P.results || {}, M = P.monthly || {}, sum = (a) => (a ? a.reduce((x, y) => x + y, 0) : null);
+  const d = (a, b) => (a != null && b ? pf(a / b - 1, 1) : '–');
+  const row = (l, a, b, f) => `<tr><td>${l}</td><td>${a == null ? '–' : f(a)}</td><td>${b == null ? '–' : f(b)}</td><td>${d(a, b)}</td></tr>`;
+  let h = `<h3>Comparaison avec l'étude PVsyst importée</h3><p class="note">${esc(P.project || '')} – ${esc(P.variant || '')} · PVsyst ${esc(P.version || '')} · ${esc(P.simdate || '')}${P.weather ? ' · météo : ' + esc(P.weather) : ''}</p>
+    <div class="tblwrap"><table class="res"><tr><th>Grandeur</th><th>Outil</th><th>PVsyst</th><th>Écart</th></tr>` +
+    row('Productible (kWh/kWc/an)', s.yield_kwh_kwc, R.yield_kwh_kwc, (v) => nf(v, 0)) +
+    row('Énergie injectée (MWh/an)', s.e_grid_mwh, R.e_grid_mwh, (v) => nf(v, 0)) +
+    row('Performance ratio', s.pr, R.pr, (v) => pf(v, 2)) +
+    row('Puissance crête (kWc)', s.pnom_kwc, R.pnom_kwc, (v) => nf(v, 1)) +
+    row('GHI (kWh/m²)', s.glob_hor, sum(M.ghi), (v) => nf(v, 1)) +
+    row('GlobInc (kWh/m²)', s.glob_inc, sum(M.globinc), (v) => nf(v, 1)) + '</table></div>';
+  if (M.e_grid_kwh && M.e_grid_kwh.length === 12)
+    h += `<div class="tblwrap" style="margin-top:10px"><table class="res"><tr><th>Mois</th>${MONTHS.map((m) => `<th>${m}</th>`).join('')}</tr>
+      <tr><td>Outil (MWh)</td>${r.monthly.slice(0, 12).map((m) => `<td>${nf(m.e_grid, 1)}</td>`).join('')}</tr>
+      <tr><td>PVsyst (MWh)</td>${M.e_grid_kwh.map((v) => `<td>${nf(v / 1000, 1)}</td>`).join('')}</tr>
+      <tr><td>Écart</td>${M.e_grid_kwh.map((v, i) => `<td>${v ? pf(r.monthly[i].e_grid / (v / 1000) - 1, 0) : '–'}</td>`).join('')}</tr></table></div>`;
+  box.innerHTML = h; box.hidden = false;
 }
 
 function fieldsTable(r) {
@@ -1063,7 +1085,7 @@ $('#expCsv').addEventListener('click', async () => { const t = await call('csv')
 $('#expJson').addEventListener('click', saveProject);
 $('#btnSave').addEventListener('click', saveProject);
 function saveProject() {
-  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb,
+  const data = { app: 'calcul-productible', version: 1, saved: new Date().toISOString(), cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb, pvsyst: S.pvsyst,
     lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near };
   download(baseName() + '.json', new Blob([JSON.stringify(data)], { type: 'application/json' }));
 }
@@ -1075,7 +1097,7 @@ $('#openProject').addEventListener('change', async (e) => {
 function loadProject(d) {
   if (d.app !== 'calcul-productible') throw new Error('fichier projet non reconnu');
   resetView();
-  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.info = {}; S.res = null; S.check = null;
+  S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.pvsyst = d.pvsyst || null; S.info = {}; S.res = null; S.check = null;
   S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; if (S.ready) parseLib();
   fillForm(); syncStrings(); save(); refreshAll();
   setStatus(`Projet « ${S.cfg.project.name} – ${S.cfg.project.variant} » ouvert.` + (d.note ? ' ' + d.note : ''), 'ok', 100);
@@ -1084,7 +1106,7 @@ function loadProject(d) {
 function resetView() {
   $('#results').hidden = true; $('#extractResults').hidden = true; S.ext = null; S.exFile = null; closeExtractCard();
   Object.values(S.charts).forEach((c) => c.destroy()); S.charts = {};
-  ['#tiles', '#tblMonthly', '#shResults', '#fieldsResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
+  ['#tiles', '#tblMonthly', '#pvsystCmp', '#shResults', '#fieldsResults', '#lossList', '#meteoBox', '#p90Box', '#hypBox', '#report'].forEach((q) => { const e = $(q); if (e) e.innerHTML = ''; });
   $$('#form input[type=file]').forEach((i) => (i.value = ''));
   const gp = $('#gsaPaste'); if (gp) gp.value = '';
   $$('#form .hint[id^="info-"]').forEach((e) => { e.textContent = ''; e.style.color = ''; });
@@ -1094,7 +1116,7 @@ function resetView() {
 $('#btnNew').addEventListener('click', () => {
   if (!confirm('Repartir d\'un projet vierge ? Les saisies et fichiers actuels seront effacés.')) return;
   resetView();
-  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.mdb = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
+  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.mdb = null; S.pvsyst = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
   fillForm(); syncStrings(); save(); refreshAll();
   $$('details.sec').forEach((d) => (d.open = d.id === 'sec-project' || d.id === 'sec-site'));
   setStatus('Nouveau projet : renseigner le site, déposer les fichiers puis lancer la simulation.', 'ok', 100);
@@ -1239,9 +1261,9 @@ function migrate(raw) {
   if (!Array.isArray(rs.shading_configs) || !rs.shading_configs.length) cfg.structure.shading_configs = [{ sub_in_height: rs.sub_in_height ?? null, share: 100 }];
   return cfg;
 }
-function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb, mdb: S.mdb, lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
+function save() { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, files: S.files, names: S.names, gsa: S.gsa, mdb: S.mdb, pvsyst: S.pvsyst, lib: { pan: S.lib.pan.map(({ name, text }) => ({ name, text })), ond: S.lib.ond.map(({ name, text }) => ({ name, text })) }, near: S.near })); } catch (e) { try { localStorage.setItem(STORE, JSON.stringify({ cfg: S.cfg, names: {}, files: {}, gsa: S.gsa })); } catch (e2) { /* stockage indisponible */ } } }
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; } } catch (e) { /* ignore */ }
+  try { const d = JSON.parse(localStorage.getItem(STORE) || 'null'); if (d) { S.cfg = migrate(d.cfg); S.files = d.files || {}; S.names = d.names || {}; S.gsa = d.gsa || null; S.mdb = d.mdb || null; S.pvsyst = d.pvsyst || null; S.lib = { pan: (d.lib && d.lib.pan) || [], ond: (d.lib && d.lib.ond) || [] }; S.near = d.near || {}; } } catch (e) { /* ignore */ }
 }
 
 load(); buildForm(); fillForm(); syncStrings(); initMap(); refreshAll();
@@ -1364,3 +1386,95 @@ $('#exXlsx').addEventListener('click', async () => {
   catch (e) { setStatus('Export Excel impossible : ' + e.message, 'err', 100); }
 });
 $('#exCsv').addEventListener('click', async () => { const t = await call('csv'); download(baseName() + '_extrait_horaire.csv', new Blob(['﻿' + t], { type: 'text/csv' })); });
+
+// ------------------------------------------------------------------ import d'un rapport PVsyst (.pdf)
+const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+function loadScript(src) { return new Promise((ok, ko) => { const e = document.createElement('script'); e.src = src; e.onload = ok; e.onerror = () => ko(new Error('chargement de ' + src)); document.head.appendChild(e); }); }
+$('#importPvsyst').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  setStatus('Lecture du rapport PVsyst…', 'busy', 30);
+  try {
+    if (!window.pdfjsLib) { await loadScript(PDFJS + 'pdf.min.js'); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js'; }
+    const pages = await PvsystImport.extractPages(window.pdfjsLib, new Uint8Array(await f.arrayBuffer()));
+    const r = PvsystImport.parse(pages); r.file = f.name;
+    showImport(r); setStatus('Rapport PVsyst lu : vérifier puis créer le projet.', 'ok', 100);
+  } catch (err) { setStatus('Import PVsyst impossible : ' + err.message, 'err', 100); }
+});
+function showImport(r) {
+  const st = r.structure, L = r.losses, B = r.bifacial, A = r.array, I = r.inverters, R = r.results;
+  const T = { fixed: 'Sheds fixes', tracker: 'Tracker mono-axe', ew: 'Est-Ouest', roof: 'Toiture / plans fixes' }[st.type];
+  const mt = (v, d = 2) => (v != null ? nf(v, d) + ' m' : '–');
+  const geo = st.type === 'tracker' ? `axe ${nf(st.axis_azimuth ?? 0, 0)}°, ±${nf(st.max_angle, 0)}°${st.backtrack ? ', backtracking' : ''} · entraxe ${mt(st.pitch)} · largeur ${mt(st.width)} · axe à ${mt(st.axis_height)} · ${st.n_rows ?? '–'} rangées`
+    : st.type === 'roof' ? (st.fields || []).map((f) => `${esc(f.name)} : ${nf(f.tilt, 0)}° / ${nf(f.azimuth, 0)}°, ${f.n_h} modules (${f.n_inv} ond. × ${f.n_str} ch. × ${f.n_series})`).join('<br>')
+    : `${nf(st.tilt, 0)}° / ${st.type === 'ew' ? 'faîtage ' + nf(st.azimuth, 0) + '° (' + ewFaces(st.azimuth) + ')' : nf(st.azimuth, 0) + '°'} · entraxe ${mt(st.pitch)} · largeur ${mt(st.width)} · hauteur ${mt(st.height)} · ${st.n_rows ?? '–'} rangées`;
+  const rows = [
+    ['Site', `${esc(r.site.name || '')} · ${nf(r.site.lat, 4)} / ${nf(r.site.lon, 4)} · ${nf(r.site.alt, 0)} m · albédo ${nf(r.site.albedo, 2)}`],
+    ['Structure', `${T} · ${geo}`],
+    ['Ombrage électrique', st.type === 'roof' ? '–' : `${st.elec_effect != null ? st.elec_effect + ' %' : '–'}${st.sub_in_height ? ' · ' + st.sub_in_height + ' chaînes dans la largeur' : ''}`],
+    ['Module', `${esc(r.module.manufacturer || '')} ${esc(r.module.model || '')} · ${nf(r.module.pnom, 0)} Wc${r.module.pan ? ' · ' + esc(r.module.pan) : ''}`],
+    ['Champ', st.type === 'roof' ? `${nf(A.n_modules)} modules` : `${A.n_series} en série × ${A.n_strings} chaînes = ${nf(A.n_series * A.n_strings)} modules · ${nf(R.pnom_kwc, 1)} kWc`],
+    ['Onduleurs', `${esc(r.inverter.manufacturer || '')} ${esc(r.inverter.model || '')} · ${I.n_inv} × ${nf(I.unit_kw, 0)} kW${I.groups ? ' · ' + I.groups.map((g) => g[0] + ' × ' + g[1] + ' ch.').join(' + ') : ''}${I.p_inj_kw ? " · limite d'injection " + nf(I.p_inj_kw) + ' kW' : ''}`],
+    ['Bifacial', B.enabled ? `bifacialité ${nf(B.bifaciality, 2)} · albédo sol ${nf(B.albedo_ground, 2)} · ombrage ${nf(B.rear_shading, 1)} % · mismatch ${nf(B.rear_mismatch, 1)} % · transparence ${nf(B.transparent, 1)} %` : 'non'],
+    ['Thermique, IAM', `Uc ${nf(r.thermal.uc, 1)} · Uv ${nf(r.thermal.uv, 1)} · ${esc(r.iam.text || '–')}`],
+    ['Pertes DC', `salissure ${nf(L.soiling, 2)} % · LID ${nf(L.lid, 2)} % · qualité ${nf(L.quality, 2)} % · mismatch ${nf(L.mismatch, 2)} %${L.string_mismatch != null ? ' + ' + nf(L.string_mismatch, 2) + ' %' : ''} · ohmiques ${nf(L.dc_ohmic, 2)} %`],
+    ['Pertes AC', `ohmiques ${nf(L.ac_ohmic, 2)} % · ligne HTA ${nf(L.mv_line ?? 0, 2)} %${L.tr_enabled ? ` · transfo ${nf(L.tr_sn_kva)} kVA (fer ${nf(L.tr_iron_kw, 2)} kW${L.tr_always_on ? ' 24 h/24' : ''}, cuivre ${nf(L.tr_cu_kw, 2)} kW)` : ' · sans transformateur'} · auxiliaires ${nf((L.aux_w || 0) / 1000, 2)} kW${L.aux_thresh_kw ? ' au-delà de ' + nf(L.aux_thresh_kw) + ' kW' : ''}, nuit ${nf((L.aux_night_w || 0) / 1000, 2)} kW · indisponibilité ${nf(L.availability, 2)} %`],
+    ['Horizon', r.horizon ? `${r.horizon.length} points (hauteur max. ${nf(Math.max(...r.horizon.map((p) => p[1])), 1)}°)` : 'aucun profil dans le rapport'],
+    ['Météo', `${esc(r.weather || '–')}${r.monthly && r.monthly.ghi ? ` · bilan mensuel GHI ${nf(r.monthly.ghi.reduce((a, b) => a + b, 0), 1)} kWh/m²` : ''}`],
+    ['Résultats PVsyst', `${nf(R.yield_kwh_kwc, 0)} kWh/kWc/an · ${nf(R.e_grid_mwh, 0)} MWh/an · PR ${pf(R.pr, 2)}`],
+  ];
+  const todo = [...r.missing.map((m) => `Saisir : ${m}.`), ...r.notes];
+  const files = ['TMY PVGIS du site (lien dans la section Météo une fois le projet créé)', `Module .PAN${r.module.pan ? ' : ' + esc(r.module.pan) : r.module.model ? ' : ' + esc(r.module.model) : ''}`, `Onduleur .OND${r.inverter.model ? ' : ' + esc(r.inverter.model) : ''}`];
+  const m = $('#importModal');
+  m.innerHTML = `<div class="imbox"><div class="rmhead"><b>Import PVsyst · ${esc(r.project || '')} – ${esc(r.variant || '')}</b><span class="note">PVsyst ${esc(r.version)} · ${esc(r.simdate || '')}</span><button type="button" class="rmx" id="imClose" title="Fermer">×</button></div>
+    <div class="imbody"><h4>Informations retrouvées</h4><table>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table>
+    ${todo.length ? `<h4>À vérifier ou compléter</h4><ul>${todo.map((t) => `<li class="warn">${esc(t)}</li>`).join('')}</ul>` : ''}
+    <h4>Fichiers à déposer ensuite</h4><ul>${files.map((t) => `<li>${t}</li>`).join('')}</ul>
+    <h4>Options</h4>
+    ${r.monthly && r.monthly.ghi && r.monthly.dif ? '<label><input type="checkbox" id="imMdb" checked><span>Utiliser le bilan météo mensuel du rapport (GHI, DIF, température) comme base de recalage du TMY, à la place de Global Solar Atlas</span></label>' : ''}
+    ${r.horizon ? `<label><input type="checkbox" id="imHz" checked><span>Reprendre le masque d'horizon du rapport (${r.horizon.length} points)</span></label>` : ''}
+    <label><input type="checkbox" id="imRef" checked><span>Garder les résultats PVsyst pour les comparer à la simulation</span></label>
+    <p class="note">Le projet en cours sera remplacé. Les pertes et hypothèses non décrites dans le rapport gardent les valeurs standard de l'outil.</p></div>
+    <div class="imfoot"><button type="button" id="imCancel">Annuler</button><button type="button" class="primary" id="imApply">Créer le projet</button></div></div>`;
+  m.hidden = false;
+  const close = () => { m.hidden = true; m.innerHTML = ''; };
+  $('#imClose').onclick = close; $('#imCancel').onclick = close;
+  $('#imApply').onclick = () => { const o = { mdb: !!($('#imMdb') && $('#imMdb').checked), hz: !!($('#imHz') && $('#imHz').checked), ref: $('#imRef').checked }; close(); applyImport(r, o); };
+}
+function applyImport(r, o) {
+  resetView();
+  S.cfg = clone(DEFAULTS); S.files = {}; S.names = {}; S.gsa = null; S.mdb = null; S.pvsyst = null; S.info = {}; S.res = null; S.check = null; S.lib = { pan: [], ond: [] }; S.near = {};
+  const c = S.cfg, st = r.structure, def = (v, d) => (v == null ? d : v);
+  Object.assign(c.project, { name: r.project || '', variant: r.variant || 'Var0' });
+  Object.assign(c.site, { lat: r.site.lat, lon: r.site.lon, alt: r.site.alt, albedo: def(r.site.albedo, c.site.albedo) });
+  c.structure.type = st.type;
+  ['tilt', 'azimuth', 'pitch', 'width', 'height', 'n_rows', 'n_high', 'orientation', 'elec_effect', 'axis_azimuth', 'max_angle', 'backtrack', 'axis_height'].forEach((k) => { if (st[k] != null) c.structure[k] = st[k]; });
+  if (st.shading_configs) c.structure.shading_configs = st.shading_configs;
+  if (st.type === 'roof') {
+    c.structure.elec_effect = 100;
+    c.structure.fields = (st.fields || []).map((f, i) => Object.assign(newField(i + 1), f, { module: 0, inverter: 0 }));
+  } else {
+    c.array.n_series = r.array.n_series;
+    if (r.inverters.groups) c.inverters.groups = r.inverters.groups;
+  }
+  c.inverters.p_inj_kw = r.inverters.p_inj_kw;
+  c.bifacial.enabled = !!r.bifacial.enabled;
+  ['albedo_ground', 'bifaciality', 'rear_shading', 'rear_mismatch', 'transparent'].forEach((k) => { if (r.bifacial[k] != null) c.bifacial[k] = r.bifacial[k]; });
+  if (r.thermal.uc != null) c.thermal.uc = r.thermal.uc;
+  if (r.thermal.uv != null) c.thermal.uv = r.thermal.uv;
+  if (r.iam.mode === 'fresnel') Object.assign(c.iam, { mode: 'fresnel', n: r.iam.n, n_ar: def(r.iam.n_ar, c.iam.n_ar) });
+  Object.entries(r.losses).forEach(([k, v]) => { if (v != null && k in c.losses) c.losses[k] = v; });
+  if (o.hz && r.horizon) { S.files.horizon = 'Azimut;Hauteur\n' + r.horizon.map(([a, h]) => `${a};${h}`).join('\n') + '\n'; S.names.horizon = 'Horizon du rapport PVsyst'; c.horizon.use = true; }
+  if (o.mdb && r.monthly) {
+    const M = r.monthly, sum = (a) => a.reduce((p, q) => p + q, 0);
+    S.mdb = { source: 'PVsyst' + (r.weather ? ' (' + r.weather.split(' – ').pop() + ')' : ''), ghi: M.ghi, dif: M.dif, temp: M.temp, ghi_year: sum(M.ghi), dif_year: sum(M.dif),
+      temp_year: M.temp ? sum(M.temp) / 12 : null, site: r.site.name, lat: r.site.lat, lon: r.site.lon, report: r.file };
+    S.names.mdb = 'Bilan mensuel du rapport PVsyst'; c.meteo.use_mdb = true; c.meteo.use_gsa = false;
+  }
+  if (o.ref) S.pvsyst = { file: r.file, project: r.project, variant: r.variant, version: r.version, simdate: r.simdate, weather: r.weather,
+    module: r.module, inverter: r.inverter, results: r.results, monthly: r.monthly, losses_diagram: r.losses_diagram };
+  fillForm(); syncStrings(); save(); refreshAll();
+  if (st.type === 'roof') renderRoof();
+  if (c.site.lat != null && c.site.lon != null && map) { placeMarker([c.site.lat, c.site.lon]); map.setView([c.site.lat, c.site.lon], 14); }
+  $$('details.sec').forEach((d) => (d.open = ['sec-meteo', 'sec-module', 'sec-inverter'].includes(d.id)));
+  setStatus(`Projet créé depuis le rapport PVsyst « ${r.project} – ${r.variant} ». Déposer le TMY PVGIS, le .PAN et le .OND, puis lancer la simulation.`, 'ok', 100);
+}

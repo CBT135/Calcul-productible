@@ -27,6 +27,7 @@
     </div>
     <div class="projbar">
       <button type="button" id="btnNew" title="Nouveau projet vierge">Nouveau</button>
+      <label class="filebtn" title="Créer un projet à partir d'un rapport de simulation PVsyst (.pdf)">Import PVsyst<input type="file" id="importPvsyst" accept=".pdf,application/pdf" hidden></label>
       <label class="filebtn" title="Ouvrir un projet .json (saisies et fichiers)">Ouvrir<input type="file" id="openProject" accept=".json,application/json" hidden></label>
       <button type="button" id="btnSave" title="Enregistrer le projet (.json)">Enregistrer</button>
     </div>
@@ -81,6 +82,7 @@
         <div class="tab on" id="tab-synth">
           <div class="card"><h3>Production mensuelle</h3><div class="chartbox"><canvas id="chMonthly"></canvas></div></div>
           <div class="card"><h3>Bilans et résultats principaux</h3><div class="tblwrap" id="tblMonthly"></div></div>
+          <div class="card" id="pvsystCmp" hidden></div>
           <div class="card" id="shResults"></div>
           <div class="card" id="fieldsResults"></div>
           <div class="card"><h3>Production journalière</h3><div class="chartbox short"><canvas id="chDaily"></canvas></div></div>
@@ -107,6 +109,8 @@
 <div id="report"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<div id="importModal" hidden></div>
+<script src="pvsyst-import.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
