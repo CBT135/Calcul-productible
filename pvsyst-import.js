@@ -8,6 +8,46 @@
   const MONTHS_EN = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
   const MONTHS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
+  // Rapports PVsyst en français : libellés ramenés à leur équivalent anglais avant la lecture
+  const FR = [
+    [/^Rapport de simulation/, 'Simulation report'], [/Simulé le\s*:/, 'Simulation date:'],
+    [/^Projet\s*:/, 'Project:'], [/^Variante\s*:/, 'Variant:'], [/^Albédo$/, 'Albedo'],
+    [/^Site géographique$/, 'Geographical Site'], [/^Données météo$/, 'Weather data'],
+    [/^Sheds illimités$/, 'Unlimited sheds'], [/^Configuration des sheds$/, 'Sheds configuration'],
+    [/^Trackers illimités/, 'Unlimited Trackers'], [/^(Suivi|Tracker)s?,? axe horizontal/i, 'Tracking horizontal axis'],
+    [/^Azimut de l'axe/, 'Axis azimuth'], [/^Backtracking activé/, 'Backtracking activated'],
+    [/^(Esp\. entre trackers|Espacement (des|entre) trackers|Pas des trackers)/, 'Tracker Spacing'], [/^Largeur (des )?trackers?/, 'Tracker width'],
+    [/^Nbre de trackers/, 'Nb. of trackers'], [/^Hauteur de l'axe( au-dessus du sol)?/, 'Axis height above ground'],
+    [/^Inclinaison\/Azimut/, 'Tilt/Azimuth'], [/^Inclinaison/, 'Tilt'], [/^Azimut(?!h)/, 'Azimuth'],
+    [/^Nbre de sheds/, 'Nb. of sheds'], [/^Esp\. entre sheds/, 'Sheds spacing'], [/^Largeur capteurs/, 'Sensitive width'],
+    [/^Largeur (des )?sheds/, 'Sheds width'], [/^Chaînes en largeur/, 'Strings in width'],
+    [/^Effet électrique des ombrages/, 'Shadings electrical effect'], [/^Effet électrique/, 'Electrical effect'],
+    [/^Hauteur au-dessus du sol/, 'Height above ground'], [/^Système bifacial/, 'Bifacial system'],
+    [/^Albédo du sol/, 'Ground albedo'], [/^Facteur de bifacialité/, 'Bifaciality factor'],
+    [/^Facteur d'ombrage (arrière|face arrière)/, 'Rear shading factor'], [/^Perte (de )?mismatch (arrière|face arrière)/, 'Rear mismatch loss'],
+    [/^Fraction transparente( des sheds)?/, 'Shed transparent fraction'], [/^Puissance active/, 'Active power'],
+    [/^Plan fixe/, 'Fixed plane'], [/Dôme/g, 'Dome'],
+    [/^Module PV$/, 'PV module'], [/^Onduleur$/, 'Inverter'], [/^Fabricant/, 'Manufacturer'], [/^Modèle/, 'Model'],
+    [/^Puissance unitaire/, 'Unit Nom. Power'], [/^Nombre de modules PV/, 'Number of PV modules'], [/^Nombre d'onduleurs/, 'Number of inverters'],
+    [/^Nominale \(STC\)/, 'Nominal (STC)'], [/^Puissance PV totale/, 'Total PV power'], [/^Puissance totale onduleur/, 'Total inverter power'],
+    [/^(Sous-)?[Cc]hamp #/, 'Array #'], [/^En série/, 'In series'], [/^Uv \(vent\)/, 'Uv (wind)'],
+    [/^Encrassement du champ/, 'Array Soiling Losses'], [/^Frac\. pertes/, 'Loss Fraction'], [/^LID\b.*$/i, 'LID - Light Induced Degradation'],
+    [/^Perte de qualité module/, 'Module Quality Loss'], [/^Pertes de mismatch modules/, 'Module mismatch losses'],
+    [/^Perte de "?mismatch"? (strings|chaînes)/, 'Strings Mismatch loss'], [/^Pertes câblage DC/, 'DC wiring losses'],
+    [/^Rés(\.|istance) globale (de )?câblage/, 'Global wiring resistance'],
+    [/^Effet d'incidence \(IAM\)\s*:/, 'Incidence effect (IAM):'], [/anti-reflets/, 'AR coating'], [/n\(verre\)/, 'n(glass)'],
+    [/^constante \(ventilateurs\)/, 'constant (fans)'], [/kW depuis seuil de puissance/, 'kW from Power thresh.'], [/^Conso\. aux\. nocturne/, 'Night aux. cons.'],
+    [/^Pertes câblage AC/, 'AC wiring losses'], [/^Sortie ond\./, 'Inv. output line'], [/^Ligne MT/, 'MV line'],
+    [/^Pertes AC dans les transformateurs/, 'AC losses in transformers'], [/^Transfo MT/, 'MV transfo'],
+    [/^Puissance nominale aux STC/, 'Nominal power at STC'], [/^Perte fer/, 'Iron Loss'], [/^Perte cuivre/, 'Copper loss'],
+    [/^Indisponibilité du système/, 'Unavailability of the system'], [/^Fraction de temps/, 'Time fraction'],
+    [/^Hauteur \[°\]/, 'Height [°]'], [/^Hauteur moyenne/, 'Average Height'],
+    [/^Energie produite/, 'Produced Energy'], [/^Productible$/, 'Specific production'], [/^Indice perf\. PR/, 'Perf. Ratio PR'],
+    [/^Indice perf\. bifacial/, 'Bifacial perf. ratio'], [/^Pas d'ombrages/, 'no Shadings'],
+    [/kWh\/kWc\/an/g, 'kWh/kWp/year'], [/(k|M|G)Wh\/an/g, '$1Wh/year'], [/\b(k|M)Wc\b/g, '$1Wp'], [/\bWc\b/g, 'Wp'],
+  ];
+  const fr = (s) => FR.reduce((t, [re, to]) => t.replace(re, to), s);
+
   async function extractPages(pdfjsLib, data) {
     const doc = await pdfjsLib.getDocument({ data, verbosity: 0 }).promise;
     const pages = [];
@@ -15,7 +55,7 @@
       const page = await doc.getPage(p);
       const tc = await page.getTextContent();
       pages.push(tc.items.filter((i) => i.str && i.str.trim() && !/^PVsyst TRIAL$/i.test(i.str.trim()))
-        .map((i) => ({ s: i.str.replace(/\s+/g, ' ').trim(), x: i.transform[4], y: i.transform[5] })));
+        .map((i) => ({ s: fr(i.str.replace(/\s+/g, ' ').trim()), x: i.transform[4], y: i.transform[5] })));
     }
     return pages;
   }
@@ -137,6 +177,9 @@
       rear_shading: val('Rear shading factor'), rear_mismatch: val('Rear mismatch loss'), transparent: val('Shed transparent fraction'),
     });
     if (st.type === 'fixed' && st.height == null) st.height = val('Height above ground');
+    if ((st.type === 'fixed' || st.type === 'ew') && st.height == null && !out.bifacial.enabled && st.pitch != null) {
+      st.height = 1.0; out.notes.push('Hauteur des tables absente (inutile sans bifacial dans PVsyst) : 1 m par défaut, sans effet sur la face avant.');
+    }
 
     // ---- champ PV et onduleurs
     out.module = { model: null, pan: (re1(/([\w.\-+()\[\] ]+\.PAN)\b/i) || [])[1] || null };
@@ -152,7 +195,7 @@
       if (a && c.col === 0 && !arrays.some((x) => x.k0 === k)) arrays.push({ k0: k, no: Number(a[1]), name: a[2] || `Champ ${a[1]}` });
     });
     const modLine = (from, to) => {
-      for (let k = from; k < to; k++) { const mm = cells[k].text.match(/^Modules\s+(\d+)\s*(?:string|strings|units?)\s*x\s*(\d+)\s*In series/i); if (mm) return [Number(mm[1]), Number(mm[2])]; }
+      for (let k = from; k < to; k++) { const mm = cells[k].text.match(/^Modules\s+(\d+)\s*(?:strings?|units?|unités?|chaînes?)\s*x\s*(\d+)\s*In series/i); if (mm) return [Number(mm[1]), Number(mm[2])]; }
       return null;
     };
     const tot = cells.findIndex((c) => /^Total PV power/i.test(c.text));

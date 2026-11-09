@@ -26,7 +26,7 @@ Les saisies et fichiers sont conservés dans le navigateur entre deux sessions.
 
 ## Importer une étude PVsyst
 
-Le bouton **Import PVsyst**, entre « Nouveau » et « Ouvrir », crée un projet à partir d'un rapport de simulation PVsyst en PDF (versions 7 et 8, rapport en anglais). Le texte du PDF est lu dans le navigateur avec pdf.js, et aucun fichier n'est transmis.
+Le bouton **Import PVsyst**, entre « Nouveau » et « Ouvrir », crée un projet à partir d'un rapport de simulation PVsyst en PDF (versions 7 et 8, rapport en anglais ou en français). Le texte du PDF est lu dans le navigateur avec pdf.js, et aucun fichier n'est transmis.
 
 **Ce qui est repris :**
 - **Projet et site** : projet, variante, coordonnées, altitude, albédo.
