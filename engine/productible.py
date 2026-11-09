@@ -1098,9 +1098,9 @@ def _simulate_one(cfg_in, files):
 
     # --- par face : irradiance -> puissance DC
     agg = {}
-    # vieillissement : dégradation annuelle cumulée jusqu'à l'année de fonctionnement simulée (année 1 = mise en service)
+    # vieillissement : 1 − dégradation × (année − 1), année 1 = mise en service
     op_year = max(1, int(cfg['lifetime'].get('year') or 1))
-    age_fac = (1 - float(cfg['lifetime'].get('degradation') or 0) / 100) ** (op_year - 1)
+    age_fac = max(0.0, 1 - float(cfg['lifetime'].get('degradation') or 0) / 100 * (op_year - 1))   # dégradation linéaire cumulée
     acc = lambda k, s, share: agg.__setitem__(k, agg.get(k, 0) + s * share)
     p_dc = pd.Series(0.0, index=w.index)
     v_w = pd.Series(0.0, index=w.index)
@@ -1393,7 +1393,7 @@ def compute_p90(y50, pkwp, cfg, files):
     deg = float(cfg['lifetime'].get('degradation', 0) or 0) / 100
     y0 = max(1, int(cfg['lifetime'].get('year') or 1))          # année déjà simulée (vieillissement inclus)
     last = max(years, y0)
-    f = lambda y: (1 - deg) ** (y - y0)
+    f = lambda y: max(0.0, 1 - deg * (y - 1)) / max(1e-9, 1 - deg * (y0 - 1))
     lifetime = [dict(annee=y, p50=y50 * f(y), p90=pxx[90] * f(y), e_p50_mwh=y50 * f(y) * pkwp / 1000)
                 for y in range(1, last + 1)]
     return p90, lifetime

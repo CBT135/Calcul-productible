@@ -182,7 +182,7 @@ function buildForm() {
     section('thermal', 'Thermique et IAM', num('thermal.uc', 'Uc', 'W/m²K') + num('thermal.uv', 'Uv', 'W/m²K/m/s') +
       sel('iam.mode', 'Modèle IAM', [['fresnel', 'Fresnel (verre + couche AR)'], ['pan', 'Profil utilisateur du .PAN']], { full: true }) +
       num('iam.n', 'Indice du verre', '', { step: 0.001, show: 'iam.mode==fresnel' }) + num('iam.n_ar', 'Indice couche AR', '', { step: 0.001, ph: 'sans', show: 'iam.mode==fresnel' })),
-    section('dc', 'Pertes DC', num('lifetime.year', 'Année de fonctionnement simulée', '', { step: 1, min: 1, hint: 'Année 1 = mise en service. Le vieillissement cumulé, (1 − dégradation)^(année − 1), est appliqué comme une perte DC.' }) +
+    section('dc', 'Pertes DC', num('lifetime.year', 'Année de fonctionnement simulée', '', { step: 1, min: 1, hint: 'Année 1 = mise en service. Le vieillissement cumulé, dégradation × (année − 1), est appliqué comme une perte DC.' }) +
       num('lifetime.degradation', 'Dégradation annuelle', '%/an', { step: 0.05 }) + num('losses.soiling', 'Salissure', '%') + num('losses.lid', 'LID', '%') + num('losses.quality', 'Qualité module', '%') +
       num('losses.mismatch', 'Mismatch modules', '%') + num('losses.string_mismatch', 'Mismatch chaînes', '%') + num('losses.dc_ohmic', 'Ohmiques DC à STC', '%')),
     section('ac', 'Pertes AC et système', num('losses.ac_ohmic', 'Ohmiques AC à STC', '%') + num('losses.mv_line', 'Ligne HTA à STC', '%') +
@@ -1043,7 +1043,7 @@ function renderP90() {
 
 function ageTxt(c) {
   const y = Math.max(1, Number(c.lifetime.year) || 1), d = Number(c.lifetime.degradation) || 0;
-  return y === 1 ? `année 1 (mise en service), sans vieillissement · dégradation ${nf(d, 2)} %/an` : `année ${y} · vieillissement ${nf(100 * (1 - Math.pow(1 - d / 100, y - 1)), 2)} % (${nf(d, 2)} %/an sur ${y - 1} an${y > 2 ? 's' : ''})`;
+  return y === 1 ? `année 1 (mise en service), sans vieillissement · dégradation ${nf(d, 2)} %/an` : `année ${y} · vieillissement ${nf(d * (y - 1), 2)} % (${nf(d, 2)} %/an sur ${y - 1} an${y > 2 ? 's' : ''})`;
 }
 function renderHyp() {
   const r = S.res, s = r.summary, pan = r.pan, ond = r.ond, c = r.config;
